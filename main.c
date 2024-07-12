@@ -5,17 +5,32 @@
 #include "common.h"
 
 
-#define TILE_SIZE 100
 #define TILE_COUNT_X 4
 #define TILE_COUNT_Y 4
 #define TILE_COUNT (TILE_COUNT_X * TILE_COUNT_Y)
-#define SPACING 15.0f
-#define PADDING 20.0f
+
+#define TILE_SIZE 100
+#define TILE_SPACING 15.0f
+#define BOARD_PADDING 20.0f
+
 #define SCORE_DISPLAY_HEIGHT 60.0f
 #define SCORE_DISPLAY_MARGIN 15.0f
-#define TEXT_SIZE (TILE_SIZE * 0.7f)
-#define WINDOW_WIDTH (TILE_COUNT_X * TILE_SIZE + (TILE_COUNT_X + 1) * SPACING + 2 * PADDING)
-#define WINDOW_HEIGHT (TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * SPACING + 3 * PADDING + SCORE_DISPLAY_HEIGHT)
+#define SCORE_DISPLAY_SPACING 12.0f
+#define SCORE_DISPLAY_NUMBER_HEIGHT 35.0f
+#define SCORE_DISPLAY_TEXT_HEIGHT 20.0f
+#define SCORE_DISPLAY_MIN_WIDTH 70.0f
+
+#define TEXT_SIZE_TILE_0 (TILE_SIZE * 0.7f)
+#define TEXT_SIZE_TILE_1 (TEXT_SIZE_TILE_0 * 0.85f)
+#define TEXT_SIZE_TILE_2 (TEXT_SIZE_TILE_0 * 0.65f)
+#define TEXT_SIZE_TILE_3 (TEXT_SIZE_TILE_0 * 0.55f)
+
+#define WINDOW_WIDTH (TILE_COUNT_X * TILE_SIZE + (TILE_COUNT_X + 1) * TILE_SPACING + 2 * BOARD_PADDING)
+#define WINDOW_HEIGHT (TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * TILE_SPACING + 3 * BOARD_PADDING + SCORE_DISPLAY_HEIGHT)
+
+#define TILE_MOVE_DURATION 0.15f
+
+#define COLOUR_TILES_COUNT 13
 
 
 const Color COLOUR_BACKGROUND = {.r = 250, .g = 248, .b = 239, .a = 255};
@@ -39,6 +54,28 @@ const Color COLOUR_TILES[] = {
     {.r = 60,  .g = 58,  .b = 50,  .a = 255}  //...
 };
 
+const Rectangle BOARD_BACKGROUND = {
+    .x = BOARD_PADDING,
+    .y = 2 * BOARD_PADDING + SCORE_DISPLAY_HEIGHT,
+    .width = TILE_COUNT_X * TILE_SIZE + (TILE_COUNT_X + 1) * TILE_SPACING,
+    .height = TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * TILE_SPACING
+};
+
+
+typedef struct Moving_tiles {
+    i32 startIndices[TILE_COUNT];
+    i32 endIndices[TILE_COUNT];
+    i32 count;
+    f32 timer;
+} Moving_tiles;
+
+typedef struct Board {
+    i32 board[TILE_COUNT];
+    Moving_tiles movingTiles;
+    bool combinedTiles[TILE_COUNT];
+    i32 newTile;
+} Board;
+
 
 static u32 PowerOf2(i32 exponent) {
     if (exponent < 0 || exponent > 32) {
@@ -49,6 +86,7 @@ static u32 PowerOf2(i32 exponent) {
     while (exponent--) {
         result *= 2;
     }
+
     return result;
 }
 
@@ -58,6 +96,7 @@ static bool IsBoardFull(i32 *board) {
             return false;
         }
     }
+
     return true;
 }
 
@@ -70,7 +109,18 @@ static i32 GetRandomFreeTile(i32 *board) {
     do {
         index = GetRandomValue(0, TILE_COUNT - 1);
     } while (board[index] != 0);
+
     return index;
+}
+
+static bool IsTileMoving(i32 index, Moving_tiles *tiles) {
+    for (i32 i = 0; i < tiles->count; ++i) {
+        if (tiles->endIndices[i] == index) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static bool CanMove(i32 *board) {
@@ -87,6 +137,7 @@ static bool CanMove(i32 *board) {
             }
         }
     }
+
     return false;
 }
 
@@ -106,121 +157,262 @@ static bool HandleMovement_Right(i32 index) {
     return index % TILE_COUNT_X != (TILE_COUNT_X - 1);
 }
 
-static void HandleMovement(i32 *board, i32 index, i32 offset, bool (*condition)(i32), bool *didMove, i32 *score) {
-    while ((*condition)(index) && board[index] != 0 && (board[index + offset] == 0 || board[index + offset] == board[index])) {
-        if (board[index + offset] > 0) {
-            *score += PowerOf2(board[index + offset] + 1);
-            board[index + offset] = -(board[index + offset] + 1);
-            board[index] = 0;
+static void HandleMovement(Board *board, i32 index, i32 offset, bool (*condition)(i32), bool *didMove, i32 *score) {
+    board->movingTiles.startIndices[board->movingTiles.count] = index;
+
+    while ((*condition)(index) && board->board[index] != 0 && !board->combinedTiles[index + offset] && 
+        (board->board[index + offset] == 0 || board->board[index + offset] == board->board[index])) {
+        *didMove = true;
+        index += offset;
+
+        if (board->board[index] > 0) {
+            *score += PowerOf2(board->board[index] + 1);
+            board->board[index] += 1;
+            board->board[index - offset] = 0;
+
+            board->combinedTiles[index] = true;
+
             break;
         }
 
-        board[index + offset] = board[index];
-        board[index] = 0;
-        index += offset;
-        *didMove = true;
+        board->board[index] = board->board[index - offset];
+        board->board[index - offset] = 0;
+    }
+
+    if (board->movingTiles.startIndices[board->movingTiles.count] != index) {
+        board->movingTiles.endIndices[board->movingTiles.count] = index;
+        ++board->movingTiles.count;
     }
 }
 
-static bool Move(i32 *board, i32 *score) {
+static void MoveUp(Board *board, bool *didMove, i32 *score) {
+    for (i32 y = 1; y < TILE_COUNT_Y; ++y) {
+        for (i32 x = 0; x < TILE_COUNT_X; ++x) {
+            i32 index = y * TILE_COUNT_X + x;
+            HandleMovement(board, index, -TILE_COUNT_X, &HandleMovement_Up, didMove, score);
+        }
+    }
+}
+
+static void MoveDown(Board *board, bool *didMove, i32 *score) {
+    for (i32 y = TILE_COUNT_Y - 2; y >= 0; --y) {
+        for (i32 x = 0; x < TILE_COUNT_X; ++x) {
+            i32 index = y * TILE_COUNT_X + x;
+            HandleMovement(board, index, TILE_COUNT_X, &HandleMovement_Down, didMove, score);
+        }
+    }
+}
+
+static void MoveLeft(Board *board, bool *didMove, i32 *score) {
+    for (i32 x = 1; x < TILE_COUNT_X; ++x) {
+        for (i32 y = 0; y < TILE_COUNT_Y; ++y) {
+            i32 index = y * TILE_COUNT_X + x;
+            HandleMovement(board, index, -1, &HandleMovement_Left, didMove, score);
+        }
+    }
+}
+
+static void MoveRight(Board *board, bool *didMove, i32 *score) {
+    for (i32 x = TILE_COUNT_X - 2; x >= 0; --x) {
+        for (i32 y = 0; y < TILE_COUNT_Y; ++y) {
+            i32 index = y * TILE_COUNT_X + x;
+            HandleMovement(board, index, 1, &HandleMovement_Right, didMove, score);
+        }
+    }
+}
+
+static bool Move(Board *board, i32 *score) {
     bool didMove = false;
 
+    Board newBoard = {.movingTiles.timer = TILE_MOVE_DURATION};
+    for (i32 i = 0; i < TILE_COUNT; ++i) {
+        newBoard.board[i] = board->board[i];
+    }
+
     if (IsKeyPressed(KEY_UP)) {
-        for (i32 y = 1; y < TILE_COUNT_Y; ++y) {
-            for (i32 x = 0; x < TILE_COUNT_X; ++x) {
-                i32 index = y * TILE_COUNT_X + x;
-                HandleMovement(board, index, -TILE_COUNT_X, &HandleMovement_Up, &didMove, score);
-            }
-        }
+        MoveUp(&newBoard, &didMove, score);
     } else if (IsKeyPressed(KEY_DOWN)) {
-        for (i32 y = TILE_COUNT_Y - 2; y >= 0; --y) {
-            for (i32 x = 0; x < TILE_COUNT_X; ++x) {
-                i32 index = y * TILE_COUNT_X + x;
-                HandleMovement(board, index, TILE_COUNT_X, &HandleMovement_Down, &didMove, score);
-            }
-        }
-    } else if (IsKeyPressed(KEY_RIGHT)) {
-        for (i32 x = TILE_COUNT_X - 2; x >= 0; --x) {
-            for (i32 y = 0; y < TILE_COUNT_Y; ++y) {
-                i32 index = y * TILE_COUNT_X + x;
-                HandleMovement(board, index, 1, &HandleMovement_Right, &didMove, score);
-            }
-        }
+        MoveDown(&newBoard, &didMove, score);
     } else if (IsKeyPressed(KEY_LEFT)) {
-        for (i32 x = 1; x < TILE_COUNT_X; ++x) {
-            for (i32 y = 0; y < TILE_COUNT_Y; ++y) {
-                i32 index = y * TILE_COUNT_X + x;
-                HandleMovement(board, index, -1, &HandleMovement_Left, &didMove, score);
-            }
-        }
+        MoveLeft(&newBoard, &didMove, score);
+    } else if (IsKeyPressed(KEY_RIGHT)) {
+        MoveRight(&newBoard, &didMove, score);
     } 
 
-    for (i32 i = 0; i < TILE_COUNT; ++i) {
-        if (board[i] < 0) {
-            board[i] *= -1;
-        }
+    if (didMove) {
+        *board = newBoard;
     }
 
     return didMove;
 }
 
+static DrawTileNumber(i32 tile, f32 tileX, f32 tileY, Font font) {
+    u32 value = PowerOf2(tile);
+    Color colour = tile > 2 ? COLOUR_TEXT_ALT : COLOUR_TEXT;
+    f32 size = 
+        tile < 7 ? // 2 digits
+            TEXT_SIZE_TILE_0 : 
+            tile < 10 ? // 3 digits
+                TEXT_SIZE_TILE_1 : 
+                tile < 14 ? // 4 digits
+                    TEXT_SIZE_TILE_2 : 
+                    TEXT_SIZE_TILE_3; // 5+ digits
+
+    const char *str = TextFormat("%d", value);
+    Vector2 strSize = MeasureTextEx(font, str, size, 0);
+    Vector2 strPos = {
+        .x = tileX + TILE_SIZE / 2 - strSize.x / 2, 
+        .y = tileY + TILE_SIZE / 2 - strSize.y / 2
+    };
+
+    DrawTextEx(font, str, strPos, size, 0, colour);
+}
+
+static void DisplayBoard(Board *board, Font font) {
+    DrawRectangleRounded(BOARD_BACKGROUND, 0.04f, 4, COLOUR_BOARD_BACKGROUND);
+
+    f32 tileY = BOARD_BACKGROUND.y + TILE_SPACING;
+    for (i32 y = 0; y < TILE_COUNT_Y; ++y) {
+        f32 tileX = BOARD_BACKGROUND.x + TILE_SPACING;
+        for (i32 x = 0; x < TILE_COUNT_X; ++x) {
+            i32 tileIndex = y * TILE_COUNT_X + x;
+            if (IsTileMoving(tileIndex, &board->movingTiles) || tileIndex == board->newTile) {
+                DrawRectangle(tileX, tileY, TILE_SIZE, TILE_SIZE, COLOUR_TILES[0]);
+                tileX += TILE_SIZE + TILE_SPACING;
+                continue;
+            }
+
+            i32 tile = board->board[tileIndex];
+
+            DrawRectangle(tileX, tileY, TILE_SIZE, TILE_SIZE, COLOUR_TILES[tile < COLOUR_TILES_COUNT ? tile : (COLOUR_TILES_COUNT - 1)]);
+
+            if (tile != 0) {
+                DrawTileNumber(tile, tileX, tileY, font);
+            }
+
+            tileX += TILE_SIZE + TILE_SPACING;
+        }
+        tileY += TILE_SIZE + TILE_SPACING;
+    }
+}
+
+static void DisplayMovingTiles(Board *board, Font font) {
+    // CONTINUE HERE! Make them pop when combining. 
+    f32 t = (TILE_MOVE_DURATION - board->movingTiles.timer) / TILE_MOVE_DURATION;
+    for (i32 i = 0; i < board->movingTiles.count; ++i) {
+        i32 startIndexX = board->movingTiles.startIndices[i] % TILE_COUNT_X;
+        i32 startIndexY = board->movingTiles.startIndices[i] / TILE_COUNT_X;
+
+        f32 startX = BOARD_BACKGROUND.x + TILE_SPACING + startIndexX * (TILE_SIZE + TILE_SPACING);
+        f32 startY = BOARD_BACKGROUND.y + TILE_SPACING + startIndexY * (TILE_SIZE + TILE_SPACING);
+
+        i32 endIndexX = board->movingTiles.endIndices[i] % TILE_COUNT_X;
+        i32 endIndexY = board->movingTiles.endIndices[i] / TILE_COUNT_X;
+
+        f32 endX = BOARD_BACKGROUND.x + TILE_SPACING + endIndexX * (TILE_SIZE + TILE_SPACING);
+        f32 endY = BOARD_BACKGROUND.y + TILE_SPACING + endIndexY * (TILE_SIZE + TILE_SPACING);
+
+        f32 tileX = startX + t * (endX - startX);
+        f32 tileY = startY + t * (endY - startY);
+
+        i32 tile = board->board[board->movingTiles.endIndices[i]];
+
+        Color colour1 = COLOUR_TILES[MinI32(tile, COLOUR_TILES_COUNT - 1)];
+        Color colour2 = colour1;
+
+        bool shouldRender = false;
+        if (board->combinedTiles[board->movingTiles.endIndices[i]]) {
+            tile -= 1;
+
+            colour1 = COLOUR_TILES[MinI32(tile, COLOUR_TILES_COUNT - 1)];
+
+            shouldRender = true;
+            for (i32 j = 0; j < board->movingTiles.count; ++j) {
+                if (j != i && board->movingTiles.endIndices[j] == board->movingTiles.endIndices[i]) {
+                    shouldRender = false;
+                    break;
+                }
+            }
+        }
+
+        Color colour = {
+            .r = colour1.r + t * (colour2.r - colour1.r),
+            .g = colour1.g + t * (colour2.g - colour1.g),
+            .b = colour1.b + t * (colour2.b - colour1.b),
+            255
+        };
+
+        if (shouldRender) {
+            DrawRectangle(endX, endY, TILE_SIZE, TILE_SIZE, colour);
+            DrawTileNumber(tile, endX, endY, font);
+        }
+
+        DrawRectangle(tileX, tileY, TILE_SIZE, TILE_SIZE, colour);
+        DrawTileNumber(tile, tileX, tileY, font);
+    }
+}
+
 static void DisplayScores(Font font, i32 score, i32 highscore) {
-    const f32 displaysSpacing = 12.0f;
-    const f32 numberHeight = 35.0f;
-    const f32 textHeight = 20.0f;
-    const f32 minWidth = 70.0f;
-
     const char *highscoreStr = TextFormat("%d", highscore);
-    f32 highscoreStrWidth = MeasureTextEx(font, highscoreStr, numberHeight, 0.0f).x;
-    Rectangle highscoreDisplay = { .width = highscoreStrWidth + 2 * SCORE_DISPLAY_MARGIN};
-    if (highscoreDisplay.width < minWidth) {
-        highscoreDisplay.width = minWidth;
-    }
-    highscoreDisplay.x = WINDOW_WIDTH - PADDING - highscoreDisplay.width;
-    highscoreDisplay.y = PADDING;
+
+    f32 highscoreStrWidth = MeasureTextEx(font, highscoreStr, SCORE_DISPLAY_NUMBER_HEIGHT, 0.0f).x;
+
+    Rectangle highscoreDisplay;
+    highscoreDisplay.width = MaxF32(highscoreStrWidth + 2 * SCORE_DISPLAY_MARGIN, SCORE_DISPLAY_MIN_WIDTH);
     highscoreDisplay.height = SCORE_DISPLAY_HEIGHT;
-    Vector2 highscoreStrPos = {highscoreDisplay.x + highscoreDisplay.width / 2 - highscoreStrWidth / 2, PADDING + SCORE_DISPLAY_HEIGHT - numberHeight - 3.0f};
+    highscoreDisplay.x = WINDOW_WIDTH - BOARD_PADDING - highscoreDisplay.width;
+    highscoreDisplay.y = BOARD_PADDING;
 
-    f32 highscoreLabelWidth = MeasureTextEx(font, "BEST", textHeight, 0.0f).x;
+    Vector2 highscoreStrPos = {
+        .x = highscoreDisplay.x + highscoreDisplay.width / 2 - highscoreStrWidth / 2, 
+        .y = BOARD_PADDING + SCORE_DISPLAY_HEIGHT - SCORE_DISPLAY_NUMBER_HEIGHT - 3.0f
+    };
 
-    const char *scoreStr = TextFormat("%d", score);
-    f32 scoreStrWidth = MeasureTextEx(font, scoreStr, numberHeight, 0.0f).x;
-    Rectangle scoreDisplay = { .width = scoreStrWidth + 2 * SCORE_DISPLAY_MARGIN};
-    if (scoreDisplay.width < minWidth) {
-        scoreDisplay.width = minWidth;
-    }
-    scoreDisplay.x = highscoreDisplay.x - displaysSpacing - scoreDisplay.width;
-    scoreDisplay.y = PADDING;
-    scoreDisplay.height = SCORE_DISPLAY_HEIGHT;
-    Vector2 scoreStrPos = {scoreDisplay.x + scoreDisplay.width / 2 - scoreStrWidth / 2, highscoreStrPos.y};
-
-    f32 scoreLabelWidth = MeasureTextEx(font, "SCORE", textHeight, 0.0f).x;
-
-    DrawRectangleRounded(scoreDisplay, 0.15f, 3, COLOUR_BOARD_BACKGROUND);
-    DrawTextEx(font, scoreStr, scoreStrPos, numberHeight, 0.0f, COLOUR_TEXT_ALT);
-    DrawTextEx(font, "SCORE", (Vector2) { scoreDisplay.x + scoreDisplay.width / 2 - scoreLabelWidth / 2, scoreStrPos.y - textHeight + 4.0f }, 
-        textHeight, 0.0f, COLOUR_TEXT_DISPLAY);
+    f32 highscoreLabelWidth = MeasureTextEx(font, "BEST", SCORE_DISPLAY_TEXT_HEIGHT, 0.0f).x;
+    Vector2 highscoreLabelPos = {
+        .x = highscoreDisplay.x + highscoreDisplay.width / 2 - highscoreLabelWidth / 2,
+        .y = highscoreStrPos.y - SCORE_DISPLAY_TEXT_HEIGHT + 4.0f
+    };
 
     DrawRectangleRounded(highscoreDisplay, 0.15f, 3, COLOUR_BOARD_BACKGROUND);
-    DrawTextEx(font, highscoreStr, highscoreStrPos, numberHeight, 0.0f, COLOUR_TEXT_ALT);
-    DrawTextEx(font, "BEST", (Vector2) { highscoreDisplay.x + highscoreDisplay.width / 2 - highscoreLabelWidth / 2,
-        highscoreStrPos.y - textHeight + 4.0f }, textHeight, 0.0f, COLOUR_TEXT_DISPLAY);
+    DrawTextEx(font, highscoreStr, highscoreStrPos, SCORE_DISPLAY_NUMBER_HEIGHT, 0.0f, COLOUR_TEXT_ALT);
+    DrawTextEx(font, "BEST", highscoreLabelPos, SCORE_DISPLAY_TEXT_HEIGHT, 0.0f, COLOUR_TEXT_DISPLAY);
+
+    const char *scoreStr = TextFormat("%d", score);
+
+    f32 scoreStrWidth = MeasureTextEx(font, scoreStr, SCORE_DISPLAY_NUMBER_HEIGHT, 0.0f).x;
+
+    Rectangle scoreDisplay;
+    scoreDisplay.width = MaxF32(scoreStrWidth + 2 * SCORE_DISPLAY_MARGIN, SCORE_DISPLAY_MIN_WIDTH);
+    scoreDisplay.height = SCORE_DISPLAY_HEIGHT;
+    scoreDisplay.x = highscoreDisplay.x - SCORE_DISPLAY_SPACING - scoreDisplay.width;
+    scoreDisplay.y = BOARD_PADDING;
+
+    Vector2 scoreStrPos = {
+        .x = scoreDisplay.x + scoreDisplay.width / 2 - scoreStrWidth / 2, 
+        .y = highscoreStrPos.y
+    };
+
+    f32 scoreLabelWidth = MeasureTextEx(font, "SCORE", SCORE_DISPLAY_TEXT_HEIGHT, 0.0f).x;
+    Vector2 scoreLabelPos = {
+        .x = scoreDisplay.x + scoreDisplay.width / 2 - scoreLabelWidth / 2,
+        .y = scoreStrPos.y - SCORE_DISPLAY_TEXT_HEIGHT + 4.0f
+    };
+
+    DrawRectangleRounded(scoreDisplay, 0.15f, 3, COLOUR_BOARD_BACKGROUND);
+    DrawTextEx(font, scoreStr, scoreStrPos, SCORE_DISPLAY_NUMBER_HEIGHT, 0.0f, COLOUR_TEXT_ALT);
+    DrawTextEx(font, "SCORE", scoreLabelPos, SCORE_DISPLAY_TEXT_HEIGHT, 0.0f, COLOUR_TEXT_DISPLAY);
 }
 
 int main() {
-    Rectangle boardBackground = {
-        .x = PADDING,
-        .y = 2 * PADDING + SCORE_DISPLAY_HEIGHT,
-        .width = TILE_COUNT_X * TILE_SIZE + (TILE_COUNT_X + 1) * SPACING,
-        .height = TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * SPACING
-    };
-
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "2048");
     SetTargetFPS(60);
 
-    i32 board[TILE_COUNT] = {0};
-    board[GetRandomFreeTile(board, TILE_COUNT)] = 1;
-    board[GetRandomFreeTile(board, TILE_COUNT)] = 1;
+    Font font = LoadFontEx("assets/fonts/ClearSans-Bold.ttf", 2 * TEXT_SIZE_TILE_0, NULL, 0);
+
+    Board board = {0};
+    board.board[GetRandomFreeTile(&board.board, TILE_COUNT)] = 1;
+    board.board[GetRandomFreeTile(&board.board, TILE_COUNT)] = 1;
 
     i32 score = 0;
     i32 highscore = 0;
@@ -229,14 +421,19 @@ int main() {
         highscore = atoi(highscoreStr);
     }
 
-    Font font = LoadFontEx("assets/fonts/ClearSans-Bold.ttf", 2 * TEXT_SIZE, NULL, 0);
-
     while (!WindowShouldClose()) {
-        // CONTINUE HERE! Sliding animation next?
-        if (Move(board, &score)) {
-            board[GetRandomFreeTile(board, TILE_COUNT)] = GetRandomValue(1, 2);
-            if (IsBoardFull(board, TILE_COUNT) && !CanMove(board)) {
-                board[0] = 13; // TODO: "Play again?"
+        board.movingTiles.timer -= GetFrameTime();
+        if (board.movingTiles.timer <= 0.0f) {
+            board.movingTiles.timer = 0.0f;
+            board.movingTiles.count = 0;
+            board.newTile = -1;
+        }
+
+        if (Move(&board, &score)) {
+            board.newTile = GetRandomFreeTile(board.board, TILE_COUNT);
+            board.board[board.newTile] = GetRandomValue(1, 2);
+            if (IsBoardFull(&board.board, TILE_COUNT) && !CanMove(&board.board)) {
+                board.board[0] = 13; // TODO: "Play again?"
                 if (score > highscore) {
                     SaveFileText("data/highscore.txt", TextFormat("%d", score));
                 }
@@ -249,30 +446,25 @@ int main() {
 
         ClearBackground(COLOUR_BACKGROUND);
 
-        DrawRectangleRounded(boardBackground, 0.04f, 4, COLOUR_BOARD_BACKGROUND);
+        DisplayBoard(&board, font);
 
-        f32 tileY = boardBackground.y + SPACING;
-        for (i32 y = 0; y < TILE_COUNT_Y; ++y) {
-            f32 tileX = boardBackground.x + SPACING;
-            for (i32 x = 0; x < TILE_COUNT_X; ++x) {
-                i32 tile = board[y * TILE_COUNT_X + x];
+        if (board.newTile != -1) {
+            f32 t = (TILE_MOVE_DURATION - board.movingTiles.timer) / TILE_MOVE_DURATION;
 
-                DrawRectangle(tileX, tileY, TILE_SIZE, TILE_SIZE, COLOUR_TILES[tile <= 12 ? tile : 12]);
+            f32 size = TILE_SIZE * t;
 
-                if (tile != 0) {
-                    u32 value = PowerOf2(tile);
-                    Color colour = tile >= 3 ? COLOUR_TEXT_ALT : COLOUR_TEXT;
-                    f32 size = tile <= 6 ? TEXT_SIZE : tile <= 9 ? TEXT_SIZE * 0.85f : tile <= 13 ? TEXT_SIZE * 0.65f : TEXT_SIZE * 0.55f;
-                    const char *str = TextFormat("%d", value);
-                    Vector2 strSize = MeasureTextEx(font, str, size, 0);
-                    DrawTextEx(font, str, (Vector2) { tileX + TILE_SIZE / 2 - strSize.x / 2, tileY + TILE_SIZE / 2 - strSize.y / 2 }, size, 0, colour);
-                }
+            i32 indexX = board.newTile % TILE_COUNT_X;
+            i32 indexY = board.newTile / TILE_COUNT_X;
 
+            f32 x = BOARD_BACKGROUND.x + TILE_SPACING + indexX * (TILE_SIZE + TILE_SPACING) + TILE_SIZE / 2 - size / 2;
+            f32 y = BOARD_BACKGROUND.y + TILE_SPACING + indexY * (TILE_SIZE + TILE_SPACING) + TILE_SIZE / 2 - size / 2;
 
-                tileX += TILE_SIZE + SPACING;
-            }
-            tileY += TILE_SIZE + SPACING;
+            i32 tile = board.board[board.newTile];
+
+            DrawRectangle(x, y, size, size, COLOUR_TILES[tile]);
         }
+
+        DisplayMovingTiles(&board, font);
 
         DisplayScores(font, score, highscore);
 
