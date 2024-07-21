@@ -1,5 +1,7 @@
+#include <stdio.h>
 #include <stdlib.h>
 
+#include "cJSON.h"
 #include "raylib.h"
 
 #include "common.h"
@@ -20,15 +22,27 @@
 #define SCORE_DISPLAY_TEXT_HEIGHT 20.0f
 #define SCORE_DISPLAY_MIN_WIDTH 70.0f
 
+#define BUTTON_NEW_GAME_WIDTH 130.0f
+#define BUTTON_NEW_GAME_HEIGHT 45.0f
+#define BUTTON_NEW_GAME_TEXT_SIZE 28.0f
+
 #define TEXT_SIZE_TILE_0 (TILE_SIZE * 0.7f)
 #define TEXT_SIZE_TILE_1 (TEXT_SIZE_TILE_0 * 0.85f)
 #define TEXT_SIZE_TILE_2 (TEXT_SIZE_TILE_0 * 0.65f)
 #define TEXT_SIZE_TILE_3 (TEXT_SIZE_TILE_0 * 0.55f)
 
+#define GAME_OVER_FADE_IN_DURATION 1.0f
+#define TEXT_SIZE_GAME_OVER 80.0f
+#define GAME_OVER_TEXT_OFFSET 150.0f
+#define BUTTON_TRY_AGAIN_WIDTH 150.0f
+#define BUTTON_TRY_AGAIN_HEIGHT 50.0f
+#define BUTTON_TRY_AGAIN_OFFSET 250.0f
+#define BUTTON_TRY_AGAIN_TEXT_SIZE 30.0f
+
 #define WINDOW_WIDTH (TILE_COUNT_X * TILE_SIZE + (TILE_COUNT_X + 1) * TILE_SPACING + 2 * BOARD_PADDING)
 #define WINDOW_HEIGHT (TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * TILE_SPACING + 3 * BOARD_PADDING + SCORE_DISPLAY_HEIGHT)
 
-#define TILE_MOVE_DURATION 0.15f
+#define TILE_MOVE_DURATION 0.12f
 
 #define COLOUR_TILES_COUNT 13
 
@@ -53,6 +67,7 @@ const Color COLOUR_TILES[] = {
     {.r = 232, .g = 190, .b = 78,  .a = 255}, // 2048
     {.r = 60,  .g = 58,  .b = 50,  .a = 255}  //...
 };
+const Color COLOUR_GAME_OVER_OVERLAY = {.r = 245, .g = 235, .b = 225, .a = 170};
 
 const Rectangle BOARD_BACKGROUND = {
     .x = BOARD_PADDING,
@@ -75,6 +90,19 @@ typedef struct Board {
     bool combinedTiles[TILE_COUNT];
     i32 newTile;
 } Board;
+
+typedef struct Button {
+    Rectangle rectangle;
+    Color colour;
+
+    Font font;
+    const char *text;
+    Vector2 textPosition;
+    f32 textSize;
+    Color textColour;
+
+    bool isActive;
+} Button;
 
 
 static u32 PowerOf2(i32 exponent) {
@@ -101,7 +129,7 @@ static bool IsBoardFull(i32 *board) {
 }
 
 static i32 GetRandomFreeTile(i32 *board) {
-    if (IsBoardFull(board, TILE_COUNT)) {
+    if (IsBoardFull(board)) {
         return -1;
     }
 
@@ -296,8 +324,23 @@ static void DisplayBoard(Board *board, Font font) {
     }
 }
 
+static void DisplayNewTile(Board *board) {
+    f32 t = (TILE_MOVE_DURATION - board->movingTiles.timer) / TILE_MOVE_DURATION;
+
+    f32 size = TILE_SIZE * t;
+
+    i32 indexX = board->newTile % TILE_COUNT_X;
+    i32 indexY = board->newTile / TILE_COUNT_X;
+
+    f32 x = BOARD_BACKGROUND.x + TILE_SPACING + indexX * (TILE_SIZE + TILE_SPACING) + TILE_SIZE / 2 - size / 2;
+    f32 y = BOARD_BACKGROUND.y + TILE_SPACING + indexY * (TILE_SIZE + TILE_SPACING) + TILE_SIZE / 2 - size / 2;
+
+    i32 tile = board->board[board->newTile];
+
+    DrawRectangle(x, y, size, size, COLOUR_TILES[tile]);
+}
+
 static void DisplayMovingTiles(Board *board, Font font) {
-    // CONTINUE HERE! Make them pop when combining. 
     f32 t = (TILE_MOVE_DURATION - board->movingTiles.timer) / TILE_MOVE_DURATION;
     for (i32 i = 0; i < board->movingTiles.count; ++i) {
         i32 startIndexX = board->movingTiles.startIndices[i] % TILE_COUNT_X;
@@ -352,6 +395,53 @@ static void DisplayMovingTiles(Board *board, Font font) {
     }
 }
 
+static Vector2 GetTextPositionCentred(Rectangle rect, Font font, const char *text, f32 textSize) {
+    Vector2 textDimensions = MeasureTextEx(font, text, textSize, 0.0f);
+    return (Vector2) {
+        .x = rect.x + rect.width / 2 - textDimensions.x / 2,
+        .y = rect.y + rect.height / 2 - textDimensions.y / 2
+    };
+}
+
+static inline Button GetButton(Rectangle rectangle, Color colour, Font font, const char *text, f32 textSize, Color textColour, bool isActive) {
+    return (Button) {
+        .rectangle = rectangle,
+        .colour = colour,
+        .font = font,
+        .text = text,
+        .textPosition = GetTextPositionCentred(rectangle, font, text, textSize),
+        .textSize = textSize,
+        .textColour = textColour,
+        .isActive = isActive
+    };
+}
+
+static void DisplayGameOver(Font font, f32 timer, Button *buttonTryAgain) {
+    f32 t = (GAME_OVER_FADE_IN_DURATION - timer) / GAME_OVER_FADE_IN_DURATION;
+
+    Color colourOverlay = COLOUR_GAME_OVER_OVERLAY;
+    colourOverlay.a *= t;
+    Color colourText = COLOUR_TEXT;
+    colourText.a *= t;
+    Color colourButton = buttonTryAgain->colour;
+    colourButton.a *= t;
+    Color colourButtonText = buttonTryAgain->textColour;
+    colourButtonText.a *= t;
+
+    DrawRectangleRounded(BOARD_BACKGROUND, 0.04f, 4, colourOverlay);
+
+    const char *str = "Game Over";
+    Vector2 strSize = MeasureTextEx(font, str, TEXT_SIZE_GAME_OVER, 0.0f);
+    Vector2 strPos = {
+        .x = BOARD_BACKGROUND.x + BOARD_BACKGROUND.width / 2 - strSize.x / 2,
+        .y = BOARD_BACKGROUND.y + GAME_OVER_TEXT_OFFSET
+    };
+    DrawTextEx(font, str, strPos, TEXT_SIZE_GAME_OVER, 0.0f, colourText);
+
+    DrawRectangleRounded(buttonTryAgain->rectangle, 0.2f, 4, colourButton);
+    DrawTextEx(buttonTryAgain->font, buttonTryAgain->text, buttonTryAgain->textPosition, buttonTryAgain->textSize, 0.0f, colourButtonText);
+}
+
 static void DisplayScores(Font font, i32 score, i32 highscore) {
     const char *highscoreStr = TextFormat("%d", highscore);
 
@@ -404,22 +494,97 @@ static void DisplayScores(Font font, i32 score, i32 highscore) {
     DrawTextEx(font, "SCORE", scoreLabelPos, SCORE_DISPLAY_TEXT_HEIGHT, 0.0f, COLOUR_TEXT_DISPLAY);
 }
 
+static cJSON *LoadJSON(const char *path) {
+    const char *jsonStr = LoadFileText(path);
+    if (jsonStr == NULL) {
+        return NULL;
+    }
+
+    cJSON *json = cJSON_Parse(jsonStr);
+
+    UnloadFileText(jsonStr);
+
+    return json;
+}
+
+static i32 LoadHighscore(const char *path) {
+    cJSON *json = LoadJSON(path);
+    if (json == NULL) {
+        return 0;
+    }
+
+    cJSON *player = cJSON_GetObjectItem(json, "player");
+    i32 highscore = cJSON_GetObjectItem(player, "highscore")->valueint;
+
+    free(json);
+
+    return highscore;
+}
+
+static bool SaveHighscore(const char *path, i32 val) {
+    cJSON *json = LoadJSON(path);
+    if (json == NULL) {
+        return false;
+    }
+
+    cJSON *player = cJSON_GetObjectItem(json, "player");
+    cJSON *highscore = cJSON_GetObjectItem(player, "highscore");
+    cJSON_SetIntValue(highscore, val);
+
+    char *str = cJSON_Print(json);
+
+    free(json);
+
+    if (!SaveFileText(path, str)) {
+        return false;
+    }
+
+    free(str);
+
+    return true;
+}
+
+// TODO: More sophisticated button logic
+static bool IsButtonPressed(Button *button) {
+    if (!button->isActive) {
+        return false;
+    }
+
+    Vector2 mousePos = GetMousePosition();
+    return IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mousePos, button->rectangle);
+}
+
 int main() {
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "2048");
-    SetTargetFPS(60);
+    SetTargetFPS(GetMonitorRefreshRate(GetCurrentMonitor()));
+
+    Image icon = LoadImage("assets/icon.png");
+    SetWindowIcon(icon);
 
     Font font = LoadFontEx("assets/fonts/ClearSans-Bold.ttf", 2 * TEXT_SIZE_TILE_0, NULL, 0);
 
+    Texture2D optionsSymbol = LoadTexture("assets/options_symbol.png");
+
     Board board = {0};
-    board.board[GetRandomFreeTile(&board.board, TILE_COUNT)] = 1;
-    board.board[GetRandomFreeTile(&board.board, TILE_COUNT)] = 1;
+    board.board[GetRandomFreeTile(&board.board)] = 1;
+    board.board[GetRandomFreeTile(&board.board)] = 1;
 
     i32 score = 0;
-    i32 highscore = 0;
-    char *highscoreStr = LoadFileText("data/highscore.txt");
-    if (highscoreStr) {
-        highscore = atoi(highscoreStr);
-    }
+    i32 highscore = LoadHighscore("assets/data.json");
+
+    bool isGameOver = false;
+    f32 gameOverFadeInTimer = GAME_OVER_FADE_IN_DURATION;
+
+    Button buttonTryAgain = GetButton((Rectangle){BOARD_BACKGROUND.x + BOARD_BACKGROUND.width / 2 - BUTTON_TRY_AGAIN_WIDTH / 2, 
+        BOARD_BACKGROUND.y + BUTTON_TRY_AGAIN_OFFSET, BUTTON_TRY_AGAIN_WIDTH, BUTTON_TRY_AGAIN_HEIGHT}, COLOUR_TEXT, font, "Try again?", 
+        BUTTON_TRY_AGAIN_TEXT_SIZE, COLOUR_TEXT_ALT, false);
+
+    Button buttonNewGame = GetButton((Rectangle){BOARD_BACKGROUND.x, BOARD_BACKGROUND.y - BOARD_PADDING - BUTTON_NEW_GAME_HEIGHT, 
+        BUTTON_NEW_GAME_WIDTH, BUTTON_NEW_GAME_HEIGHT}, COLOUR_TEXT, font, "New game", BUTTON_NEW_GAME_TEXT_SIZE, COLOUR_TEXT_ALT, true);
+
+    Button buttonOptions = GetButton((Rectangle){buttonNewGame.rectangle.x + buttonNewGame.rectangle.width + SCORE_DISPLAY_SPACING, buttonNewGame.rectangle.y, 
+        BUTTON_NEW_GAME_HEIGHT, BUTTON_NEW_GAME_HEIGHT}, COLOUR_TEXT, font, "", 0, BLANK, true);
+
 
     while (!WindowShouldClose()) {
         board.movingTiles.timer -= GetFrameTime();
@@ -429,13 +594,60 @@ int main() {
             board.newTile = -1;
         }
 
-        if (Move(&board, &score)) {
-            board.newTile = GetRandomFreeTile(board.board, TILE_COUNT);
+        if (isGameOver) {
+            gameOverFadeInTimer -= GetFrameTime();
+            if (gameOverFadeInTimer < 0.0f) {
+                gameOverFadeInTimer = 0.0f;
+            }
+        }
+
+        if (IsButtonPressed(&buttonOptions)) {
+            MinimizeWindow();
+        }
+
+        if (IsButtonPressed(&buttonNewGame) && !(isGameOver && gameOverFadeInTimer > 0.0f)) {
+            board = (Board){0};
+            board.board[GetRandomFreeTile(&board.board)] = 1;
+            board.board[GetRandomFreeTile(&board.board)] = 1;
+
+            if (score > highscore) {
+                SaveHighscore("assets/data.json", score);
+                highscore = score;
+            }
+            score = 0;
+
+            gameOverFadeInTimer = GAME_OVER_FADE_IN_DURATION;
+
+            isGameOver = false;
+        }
+
+        if (IsButtonPressed(&buttonTryAgain) && gameOverFadeInTimer == 0.0f) {
+            board = (Board){0};
+            board.board[GetRandomFreeTile(&board.board)] = 1;
+            board.board[GetRandomFreeTile(&board.board)] = 1;
+
+            highscore = MaxI32(score, highscore);
+            score = 0;
+
+            gameOverFadeInTimer = GAME_OVER_FADE_IN_DURATION;
+
+            isGameOver = false;
+
+            buttonTryAgain.isActive = false;
+        }
+
+        if (!isGameOver && Move(&board, &score)) {
+            board.newTile = GetRandomFreeTile(board.board);
             board.board[board.newTile] = GetRandomValue(1, 2);
-            if (IsBoardFull(&board.board, TILE_COUNT) && !CanMove(&board.board)) {
-                board.board[0] = 13; // TODO: "Play again?"
+            if (IsBoardFull(&board.board) && !CanMove(&board.board)) {
+                isGameOver = true;
+
+                board.movingTiles.timer = 0.0f;
+
+                buttonTryAgain.isActive = true;
+
                 if (score > highscore) {
-                    SaveFileText("data/highscore.txt", TextFormat("%d", score));
+                    SaveHighscore("assets/data.json", score);
                 }
             }
         }
@@ -448,28 +660,30 @@ int main() {
 
         DisplayBoard(&board, font);
 
-        if (board.newTile != -1) {
-            f32 t = (TILE_MOVE_DURATION - board.movingTiles.timer) / TILE_MOVE_DURATION;
+        if (!isGameOver) {
+            if (board.newTile != -1) {
+                DisplayNewTile(&board);
+            }
 
-            f32 size = TILE_SIZE * t;
-
-            i32 indexX = board.newTile % TILE_COUNT_X;
-            i32 indexY = board.newTile / TILE_COUNT_X;
-
-            f32 x = BOARD_BACKGROUND.x + TILE_SPACING + indexX * (TILE_SIZE + TILE_SPACING) + TILE_SIZE / 2 - size / 2;
-            f32 y = BOARD_BACKGROUND.y + TILE_SPACING + indexY * (TILE_SIZE + TILE_SPACING) + TILE_SIZE / 2 - size / 2;
-
-            i32 tile = board.board[board.newTile];
-
-            DrawRectangle(x, y, size, size, COLOUR_TILES[tile]);
+            DisplayMovingTiles(&board, font);
+        } else {
+            DisplayGameOver(font, gameOverFadeInTimer, &buttonTryAgain);
         }
-
-        DisplayMovingTiles(&board, font);
 
         DisplayScores(font, score, highscore);
 
+        DrawRectangleRounded(buttonNewGame.rectangle, 0.3f, 4, buttonNewGame.colour);
+        DrawTextEx(buttonNewGame.font, buttonNewGame.text, buttonNewGame.textPosition, buttonNewGame.textSize, 0.0f, buttonNewGame.textColour);
+
+        DrawRectangleRounded(buttonOptions.rectangle, 0.3f, 4, buttonOptions.colour);
+        DrawTexture(optionsSymbol, buttonOptions.rectangle.x + buttonOptions.rectangle.width / 2.0f - optionsSymbol.width / 2.0f, 
+            buttonOptions.rectangle.y + buttonOptions.rectangle.height / 2.0f - optionsSymbol.height / 2.0f, WHITE);
+
         EndDrawing();
     }
+
+    UnloadTexture(optionsSymbol);
+    UnloadFont(font);
 
     CloseWindow();
 
