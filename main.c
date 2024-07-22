@@ -43,6 +43,8 @@
 #define WINDOW_HEIGHT (TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * TILE_SPACING + 3 * BOARD_PADDING + SCORE_DISPLAY_HEIGHT)
 
 #define TILE_MOVE_DURATION 0.12f
+#define TILE_COMBINE_DURATION 0.1f
+#define TILE_COMBINE_DELTA_SIZE 20.0f
 
 #define COLOUR_TILES_COUNT 13
 
@@ -88,6 +90,7 @@ typedef struct Board {
     i32 board[TILE_COUNT];
     Moving_tiles movingTiles;
     bool combinedTiles[TILE_COUNT];
+    f32 combinedTimer;
     i32 newTile;
 } Board;
 
@@ -494,6 +497,55 @@ static void DisplayScores(Font font, i32 score, i32 highscore) {
     DrawTextEx(font, "SCORE", scoreLabelPos, SCORE_DISPLAY_TEXT_HEIGHT, 0.0f, COLOUR_TEXT_DISPLAY);
 }
 
+static void DisplayButtons(Button *newGame, Button *options, Texture2D *optionsSymbol) {
+    DrawRectangleRounded(newGame->rectangle, 0.3f, 4, newGame->colour);
+    DrawTextEx(newGame->font, newGame->text, newGame->textPosition, newGame->textSize, 0.0f, newGame->textColour);
+
+    DrawRectangleRounded(options->rectangle, 0.3f, 4, options->colour);
+    DrawTexture(*optionsSymbol, options->rectangle.x + options->rectangle.width / 2.0f - optionsSymbol->width / 2.0f, 
+        options->rectangle.y + options->rectangle.height / 2.0f - optionsSymbol->height / 2.0f, WHITE);
+}
+
+static void DisplayCombinedTiles(Board *board, Font font) {
+    f32 t = (TILE_COMBINE_DURATION - board->combinedTimer) / TILE_COMBINE_DURATION;
+    t = -4.0f * t * (t - 1.0f);
+    f32 deltaSize = TILE_COMBINE_DELTA_SIZE * t;
+    for (i32 y = 0; y < TILE_COUNT_Y; ++y) {
+        for (i32 x = 0; x < TILE_COUNT_X; ++x) {
+            i32 index = y * TILE_COUNT_X + x;
+            if (board->combinedTiles[index]) {
+                i32 tile = board->board[index];
+
+                f32 tileX = BOARD_BACKGROUND.x + TILE_SPACING + x * (TILE_SIZE + TILE_SPACING);
+                f32 tileY = BOARD_BACKGROUND.y + TILE_SPACING + y * (TILE_SIZE + TILE_SPACING);
+
+                DrawRectangle(tileX  - deltaSize / 2, tileY  - deltaSize / 2, TILE_SIZE + deltaSize, TILE_SIZE + deltaSize, COLOUR_TILES[tile]);
+
+                u32 value = PowerOf2(tile);
+                Color colour = tile > 2 ? COLOUR_TEXT_ALT : COLOUR_TEXT;
+                f32 size = 
+                    tile < 7 ? // 2 digits
+                    TEXT_SIZE_TILE_0 : 
+                    tile < 10 ? // 3 digits
+                    TEXT_SIZE_TILE_1 : 
+                    tile < 14 ? // 4 digits
+                    TEXT_SIZE_TILE_2 : 
+                    TEXT_SIZE_TILE_3; // 5+ digits
+                size += deltaSize;
+
+                const char *str = TextFormat("%d", value);
+                Vector2 strSize = MeasureTextEx(font, str, size, 0);
+                Vector2 strPos = {
+                    .x = tileX + TILE_SIZE / 2 - strSize.x / 2, 
+                    .y = tileY + TILE_SIZE / 2 - strSize.y / 2
+                };
+
+                DrawTextEx(font, str, strPos, size, 0, colour);
+            }
+        }
+    }
+}
+
 static cJSON *LoadJSON(const char *path) {
     const char *jsonStr = LoadFileText(path);
     if (jsonStr == NULL) {
@@ -565,7 +617,7 @@ int main() {
 
     Texture2D optionsSymbol = LoadTexture("assets/options_symbol.png");
 
-    Board board = {0};
+    Board board = {.newTile = -1};
     board.board[GetRandomFreeTile(&board.board)] = 1;
     board.board[GetRandomFreeTile(&board.board)] = 1;
 
@@ -591,7 +643,17 @@ int main() {
         if (board.movingTiles.timer <= 0.0f) {
             board.movingTiles.timer = 0.0f;
             board.movingTiles.count = 0;
+
+            if (board.newTile != -1) {
+                board.combinedTimer = TILE_COMBINE_DURATION;
+            }
+
             board.newTile = -1;
+        }
+
+        board.combinedTimer -= GetFrameTime();
+        if (board.combinedTimer < 0.0f) {
+            board.combinedTimer = -1.0f;
         }
 
         if (isGameOver) {
@@ -672,14 +734,17 @@ int main() {
 
         DisplayScores(font, score, highscore);
 
-        DrawRectangleRounded(buttonNewGame.rectangle, 0.3f, 4, buttonNewGame.colour);
-        DrawTextEx(buttonNewGame.font, buttonNewGame.text, buttonNewGame.textPosition, buttonNewGame.textSize, 0.0f, buttonNewGame.textColour);
+        DisplayButtons(&buttonNewGame, &buttonOptions, &optionsSymbol);
 
-        DrawRectangleRounded(buttonOptions.rectangle, 0.3f, 4, buttonOptions.colour);
-        DrawTexture(optionsSymbol, buttonOptions.rectangle.x + buttonOptions.rectangle.width / 2.0f - optionsSymbol.width / 2.0f, 
-            buttonOptions.rectangle.y + buttonOptions.rectangle.height / 2.0f - optionsSymbol.height / 2.0f, WHITE);
+        if (board.combinedTimer > 0.0f) {
+            DisplayCombinedTiles(&board, font);
+        }
 
         EndDrawing();
+    }
+
+    if (score > highscore) {
+        SaveHighscore("assets/data.json", score);
     }
 
     UnloadTexture(optionsSymbol);
