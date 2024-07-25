@@ -39,6 +39,17 @@
 #define BUTTON_TRY_AGAIN_OFFSET 250.0f
 #define BUTTON_TRY_AGAIN_TEXT_SIZE 30.0f
 
+#define BUTTONS_KEYBINDS_OFFSET_X 30.0f
+#define BUTTONS_KEYBINDS_START_X (WINDOW_WIDTH / 2.0f)
+#define BUTTONS_KEYBINDS_START_Y (BOARD_BACKGROUND.y + 15.0f)
+#define BUTTONS_KEYBINDS_POSITION_DELTA ((TILE_SIZE + TILE_SPACING) / 2.0f)
+#define BUTTONS_KEYBINDS_TEXT_SIZE 30.0f
+#define BUTTONS_KEYBINDS_TEXT_MARGIN 10.0f
+#define BUTTONS_KEYBINDS_HEIGHT 43.0f
+
+#define OPTIONS_TIMER_DURATION 0.2f
+#define KEY_BINDINGS_COUNT 4
+
 #define WINDOW_WIDTH (TILE_COUNT_X * TILE_SIZE + (TILE_COUNT_X + 1) * TILE_SPACING + 2 * BOARD_PADDING)
 #define WINDOW_HEIGHT (TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * TILE_SPACING + 3 * BOARD_PADDING + SCORE_DISPLAY_HEIGHT)
 
@@ -47,6 +58,8 @@
 #define TILE_COMBINE_DELTA_SIZE 20.0f
 
 #define COLOUR_TILES_COUNT 13
+
+#define FONT_SIZE 80.0f
 
 
 const Color COLOUR_BACKGROUND = {.r = 250, .g = 248, .b = 239, .a = 255};
@@ -106,6 +119,18 @@ typedef struct Button {
 
     bool isActive;
 } Button;
+
+typedef struct Keybinds {
+    union {
+        struct {
+            i32 up;
+            i32 down;
+            i32 left;
+            i32 right;
+        };
+        i32 binds[KEY_BINDINGS_COUNT];
+    };
+} Keybinds;
 
 
 static u32 PowerOf2(i32 exponent) {
@@ -252,7 +277,7 @@ static void MoveRight(Board *board, bool *didMove, i32 *score) {
     }
 }
 
-static bool Move(Board *board, i32 *score) {
+static bool Move(Board *board, Keybinds *keybinds, i32 *score) {
     bool didMove = false;
 
     Board newBoard = {.movingTiles.timer = TILE_MOVE_DURATION};
@@ -260,13 +285,13 @@ static bool Move(Board *board, i32 *score) {
         newBoard.board[i] = board->board[i];
     }
 
-    if (IsKeyPressed(KEY_UP)) {
+    if (IsKeyPressed(keybinds->up)) {
         MoveUp(&newBoard, &didMove, score);
-    } else if (IsKeyPressed(KEY_DOWN)) {
+    } else if (IsKeyPressed(keybinds->down)) {
         MoveDown(&newBoard, &didMove, score);
-    } else if (IsKeyPressed(KEY_LEFT)) {
+    } else if (IsKeyPressed(keybinds->left)) {
         MoveLeft(&newBoard, &didMove, score);
-    } else if (IsKeyPressed(KEY_RIGHT)) {
+    } else if (IsKeyPressed(keybinds->right)) {
         MoveRight(&newBoard, &didMove, score);
     } 
 
@@ -406,19 +431,6 @@ static Vector2 GetTextPositionCentred(Rectangle rect, Font font, const char *tex
     };
 }
 
-static inline Button GetButton(Rectangle rectangle, Color colour, Font font, const char *text, f32 textSize, Color textColour, bool isActive) {
-    return (Button) {
-        .rectangle = rectangle,
-        .colour = colour,
-        .font = font,
-        .text = text,
-        .textPosition = GetTextPositionCentred(rectangle, font, text, textSize),
-        .textSize = textSize,
-        .textColour = textColour,
-        .isActive = isActive
-    };
-}
-
 static void DisplayGameOver(Font font, f32 timer, Button *buttonTryAgain) {
     f32 t = (GAME_OVER_FADE_IN_DURATION - timer) / GAME_OVER_FADE_IN_DURATION;
 
@@ -497,13 +509,37 @@ static void DisplayScores(Font font, i32 score, i32 highscore) {
     DrawTextEx(font, "SCORE", scoreLabelPos, SCORE_DISPLAY_TEXT_HEIGHT, 0.0f, COLOUR_TEXT_DISPLAY);
 }
 
-static void DisplayButtons(Button *newGame, Button *options, Texture2D *optionsSymbol) {
+static void DisplayButtons(Button *newGame, Button *options, Texture2D *optionsSymbol, f32 optionsTimer) {
     DrawRectangleRounded(newGame->rectangle, 0.3f, 4, newGame->colour);
     DrawTextEx(newGame->font, newGame->text, newGame->textPosition, newGame->textSize, 0.0f, newGame->textColour);
 
     DrawRectangleRounded(options->rectangle, 0.3f, 4, options->colour);
-    DrawTexture(*optionsSymbol, options->rectangle.x + options->rectangle.width / 2.0f - optionsSymbol->width / 2.0f, 
-        options->rectangle.y + options->rectangle.height / 2.0f - optionsSymbol->height / 2.0f, WHITE);
+
+    if (optionsTimer == 0.0f || optionsTimer == OPTIONS_TIMER_DURATION) {
+        DrawTexture(*optionsSymbol, options->rectangle.x + options->rectangle.width / 2.0f - optionsSymbol->width / 2.0f, 
+            options->rectangle.y + options->rectangle.height / 2.0f - optionsSymbol->height / 2.0f, WHITE);
+    } else {
+        f32 t = (OPTIONS_TIMER_DURATION - optionsTimer) / OPTIONS_TIMER_DURATION;
+        f32 rotation = 60.0f * t;
+
+        Rectangle symbolSrc = {
+            .x = 0.0f,
+            .y = 0.0f,
+            .width = optionsSymbol->width,
+            .height = optionsSymbol->height
+        };
+        Rectangle symbolDst = {
+            .x = options->rectangle.x + options->rectangle.width / 2.0f,
+            .y = options->rectangle.y + options->rectangle.height / 2.0f,
+            .width = symbolSrc.width,
+            .height = symbolSrc.height
+        };
+        Vector2 origin = {
+            .x = symbolSrc.width / 2,
+            .y = symbolSrc.height / 2
+        };
+        DrawTexturePro(*optionsSymbol, symbolSrc, symbolDst, origin, rotation, WHITE);
+    }
 }
 
 static void DisplayCombinedTiles(Board *board, Font font) {
@@ -543,6 +579,46 @@ static void DisplayCombinedTiles(Board *board, Font font) {
                 DrawTextEx(font, str, strPos, size, 0, colour);
             }
         }
+    }
+}
+
+static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 buttonToBindIndex) {
+    f32 t = (OPTIONS_TIMER_DURATION - optionsTimer) / OPTIONS_TIMER_DURATION;
+
+    Color colourOverlay = COLOUR_GAME_OVER_OVERLAY;
+    colourOverlay.a *= t;
+
+    DrawRectangleRounded(BOARD_BACKGROUND, 0.04f, 4, colourOverlay);
+
+    const char *labelsText[KEY_BINDINGS_COUNT] = {"Up", "Down", "Left", "Right"};
+    for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
+        Color colour = buttonsKeybinds[i].colour;
+        colour.a *= t;
+        Color textColour = buttonsKeybinds[i].textColour;
+        textColour.a *= t;
+
+        if (i == buttonToBindIndex) {
+            Vector2 textDimensions = MeasureTextEx(buttonsKeybinds[i].font, "[Press new key]", buttonsKeybinds[i].textSize, 0.0f);
+            Rectangle rectangle = buttonsKeybinds[i].rectangle;
+            rectangle.width = textDimensions.x + 2 * BUTTONS_KEYBINDS_TEXT_MARGIN;
+            Vector2 textPosition = {
+                .x = rectangle.x + rectangle.width / 2 - textDimensions.x / 2,
+                .y = rectangle.y + rectangle.height / 2 - textDimensions.y / 2,
+            };
+            DrawRectangleRounded(rectangle, 0.3f, 4, colour);
+            DrawTextEx(buttonsKeybinds[i].font, "[Press new key]", textPosition, buttonsKeybinds[i].textSize, 0.0f, textColour);
+        } else {
+            DrawRectangleRounded(buttonsKeybinds[i].rectangle, 0.3f, 4, colour);
+            DrawTextEx(buttonsKeybinds[i].font, buttonsKeybinds[i].text, buttonsKeybinds[i].textPosition, buttonsKeybinds[i].textSize, 
+                0.0f, textColour);
+        }  
+
+        Vector2 labelTextDimensions = MeasureTextEx(buttonsKeybinds[i].font, labelsText[i], BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f);
+        Vector2 labelTextPosition = {
+            .x = BUTTONS_KEYBINDS_START_X - BUTTONS_KEYBINDS_OFFSET_X - labelTextDimensions.x,
+            .y = buttonsKeybinds[i].rectangle.y
+        };
+        DrawTextEx(buttonsKeybinds[i].font, labelsText[i], labelTextPosition, BUTTONS_KEYBINDS_TEXT_SIZE, 0, colour);
     }
 }
 
@@ -606,16 +682,129 @@ static bool IsButtonPressed(Button *button) {
     return IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mousePos, button->rectangle);
 }
 
+static const char *KeyCodeToString(i32 key) {
+    switch (key) {
+        case(KEY_APOSTROPHE):    return "'";            // '
+        case(KEY_COMMA):         return ",";            // ,
+        case(KEY_MINUS):         return "-";            // -
+        case(KEY_PERIOD):        return ".";            // .
+        case(KEY_SLASH):         return "/";            // /
+        case(KEY_ZERO):          return "0";            // 0
+        case(KEY_ONE):           return "1";            // 1
+        case(KEY_TWO):           return "2";            // 2
+        case(KEY_THREE):         return "3";            // 3
+        case(KEY_FOUR):          return "4";            // 4
+        case(KEY_FIVE):          return "5";            // 5
+        case(KEY_SIX):           return "6";            // 6
+        case(KEY_SEVEN):         return "7";            // 7
+        case(KEY_EIGHT):         return "8";            // 8
+        case(KEY_NINE):          return "9";            // 9
+        case(KEY_SEMICOLON):     return ";";            // ;
+        case(KEY_EQUAL):         return "=";            // =
+        case(KEY_A):             return "A";            // A | a
+        case(KEY_B):             return "B";            // B | b
+        case(KEY_C):             return "C";            // C | c
+        case(KEY_D):             return "D";            // D | d
+        case(KEY_E):             return "E";            // E | e
+        case(KEY_F):             return "F";            // F | f
+        case(KEY_G):             return "G";            // G | g
+        case(KEY_H):             return "H";            // H | h
+        case(KEY_I):             return "I";            // I | i
+        case(KEY_J):             return "J";            // J | j
+        case(KEY_K):             return "K";            // K | k
+        case(KEY_L):             return "L";            // L | l
+        case(KEY_M):             return "M";            // M | m
+        case(KEY_N):             return "N";            // N | n
+        case(KEY_O):             return "O";            // O | o
+        case(KEY_P):             return "P";            // P | p
+        case(KEY_Q):             return "Q";            // Q | q
+        case(KEY_R):             return "R";            // R | r
+        case(KEY_S):             return "S";            // S | s
+        case(KEY_T):             return "T";            // T | t
+        case(KEY_U):             return "U";            // U | u
+        case(KEY_V):             return "V";            // V | v
+        case(KEY_W):             return "W";            // W | w
+        case(KEY_X):             return "X";            // X | x
+        case(KEY_Y):             return "Y";            // Y | y
+        case(KEY_Z):             return "Z";            // Z | z
+        case(KEY_LEFT_BRACKET):  return "[";            // [
+        case(KEY_BACKSLASH):     return "\\";           // '\'
+        case(KEY_RIGHT_BRACKET): return "]";            // ]
+        case(KEY_GRAVE):         return "`";            // `
+        case(161):               return "World 1";      // non-US
+        case(162):               return "World 2";      // non-US
+        case(KEY_SPACE):         return "Space";        // Space
+        case(KEY_ENTER):         return "Enter";        // Enter
+        case(KEY_TAB):           return "Tab";          // Tab
+        case(KEY_BACKSPACE):     return "Backspace";    // Backspace
+        case(KEY_INSERT):        return "Insert";       // Ins
+        case(KEY_DELETE):        return "Delete";       // Del
+        case(KEY_RIGHT):         return "Arrow right";  // Cursor right
+        case(KEY_LEFT):          return "Arrow left";   // Cursor left
+        case(KEY_DOWN):          return "Arrow down";   // Cursor down
+        case(KEY_UP):            return "Arrow up";     // Cursor up
+        case(KEY_PAGE_UP):       return "Page up";      // Page up
+        case(KEY_PAGE_DOWN):     return "Page down";    // Page down
+        case(KEY_HOME):          return "Home";         // Home
+        case(KEY_END):           return "End";          // End
+        case(KEY_CAPS_LOCK):     return "Caps lock";    // Caps lock
+        case(KEY_SCROLL_LOCK):   return "Scroll lock";  // Scroll down
+        case(KEY_F1):            return "F1";           // F1
+        case(KEY_F2):            return "F2";           // F2
+        case(KEY_F3):            return "F3";           // F3
+        case(KEY_F4):            return "F4";           // F4
+        case(KEY_F5):            return "F5";           // F5
+        case(KEY_F6):            return "F6";           // F6
+        case(KEY_F7):            return "F7";           // F7
+        case(KEY_F8):            return "F8";           // F8
+        case(KEY_F9):            return "F9";           // F9
+        case(KEY_F10):           return "F10";          // F10
+        case(KEY_F11):           return "F11";          // F11
+        case(KEY_F12):           return "F12";          // F12
+        case(KEY_LEFT_SHIFT):    return "Left shift";   // Shift left
+        case(KEY_LEFT_CONTROL):  return "Left ctrl";    // Control left
+        case(KEY_LEFT_ALT):      return "Left alt";     // Alt left
+        case(KEY_LEFT_SUPER):    return "Left super";   // Super left
+        case(KEY_RIGHT_SHIFT):   return "Right shift";  // Shift right
+        case(KEY_RIGHT_CONTROL): return "Right ctrl";   // Control right
+        case(KEY_RIGHT_ALT):     return "Right alt";    // Alt right
+        case(KEY_RIGHT_SUPER):   return "Right super";  // Super right
+        case(KEY_KB_MENU):       return "KB menu";      // KB menu
+        case(KEY_KP_0):          return "Keypad 0";     // Keypad 0
+        case(KEY_KP_1):          return "Keypad 1";     // Keypad 1
+        case(KEY_KP_2):          return "Keypad 2";     // Keypad 2
+        case(KEY_KP_3):          return "Keypad 3";     // Keypad 3
+        case(KEY_KP_4):          return "Keypad 4";     // Keypad 4
+        case(KEY_KP_5):          return "Keypad 5";     // Keypad 5
+        case(KEY_KP_6):          return "Keypad 6";     // Keypad 6
+        case(KEY_KP_7):          return "Keypad 7";     // Keypad 7
+        case(KEY_KP_8):          return "Keypad 8";     // Keypad 8
+        case(KEY_KP_9):          return "Keypad 9";     // Keypad 9
+        case(KEY_KP_DECIMAL):    return "Keypad .";     // Keypad .
+        case(KEY_KP_DIVIDE):     return "Keypad /";     // Keypad /
+        case(KEY_KP_MULTIPLY):   return "Keypad *";     // Keypad *
+        case(KEY_KP_SUBTRACT):   return "Keypad -";     // Keypad -
+        case(KEY_KP_ADD):        return "Keypad +";     // Keypad +
+        case(KEY_KP_ENTER):      return "Keypad enter"; // Keypad Enter
+        case(KEY_KP_EQUAL):      return "Keypad equal"; // Keypad Equal
+
+        default:                 return TextFormat("Undefined: %d", key);
+    }
+}
+
 int main() {
+    //SetConfigFlags(FLAG_MSAA_4X_HINT); // Doesn't do anything?
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "2048");
     SetTargetFPS(GetMonitorRefreshRate(GetCurrentMonitor()));
 
     Image icon = LoadImage("assets/icon.png");
     SetWindowIcon(icon);
 
-    Font font = LoadFontEx("assets/fonts/ClearSans-Bold.ttf", 2 * TEXT_SIZE_TILE_0, NULL, 0);
+    Font font = LoadFontEx("assets/fonts/ClearSans-Bold.ttf", FONT_SIZE, NULL, 0);
+    SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
 
     Texture2D optionsSymbol = LoadTexture("assets/options_symbol.png");
+    SetTextureFilter(optionsSymbol, TEXTURE_FILTER_BILINEAR);
 
     Board board = {.newTile = -1};
     board.board[GetRandomFreeTile(&board.board)] = 1;
@@ -627,18 +816,160 @@ int main() {
     bool isGameOver = false;
     f32 gameOverFadeInTimer = GAME_OVER_FADE_IN_DURATION;
 
-    Button buttonTryAgain = GetButton((Rectangle){BOARD_BACKGROUND.x + BOARD_BACKGROUND.width / 2 - BUTTON_TRY_AGAIN_WIDTH / 2, 
-        BOARD_BACKGROUND.y + BUTTON_TRY_AGAIN_OFFSET, BUTTON_TRY_AGAIN_WIDTH, BUTTON_TRY_AGAIN_HEIGHT}, COLOUR_TEXT, font, "Try again?", 
-        BUTTON_TRY_AGAIN_TEXT_SIZE, COLOUR_TEXT_ALT, false);
+    bool isOptionsMenuOpen = false;
+    f32 optionsTimer = OPTIONS_TIMER_DURATION;
 
-    Button buttonNewGame = GetButton((Rectangle){BOARD_BACKGROUND.x, BOARD_BACKGROUND.y - BOARD_PADDING - BUTTON_NEW_GAME_HEIGHT, 
-        BUTTON_NEW_GAME_WIDTH, BUTTON_NEW_GAME_HEIGHT}, COLOUR_TEXT, font, "New game", BUTTON_NEW_GAME_TEXT_SIZE, COLOUR_TEXT_ALT, true);
+    Button buttonTryAgain = {
+        .rectangle = {
+            .x = BOARD_BACKGROUND.x + BOARD_BACKGROUND.width / 2 - BUTTON_TRY_AGAIN_WIDTH / 2,
+            .y = BOARD_BACKGROUND.y + BUTTON_TRY_AGAIN_OFFSET,
+            .width = BUTTON_TRY_AGAIN_WIDTH,
+            .height = BUTTON_TRY_AGAIN_HEIGHT
+        },
+        .colour = COLOUR_TEXT,
+        .font = font,
+        .text = "Try again?",
+        .textSize = BUTTON_TRY_AGAIN_TEXT_SIZE,
+        .textColour = COLOUR_TEXT_ALT,
+        .isActive = false
+    };
+    buttonTryAgain.textPosition = GetTextPositionCentred(buttonTryAgain.rectangle, buttonTryAgain.font, buttonTryAgain.text, buttonTryAgain.textSize);
 
-    Button buttonOptions = GetButton((Rectangle){buttonNewGame.rectangle.x + buttonNewGame.rectangle.width + SCORE_DISPLAY_SPACING, buttonNewGame.rectangle.y, 
-        BUTTON_NEW_GAME_HEIGHT, BUTTON_NEW_GAME_HEIGHT}, COLOUR_TEXT, font, "", 0, BLANK, true);
+    Button buttonNewGame = {
+        .rectangle = {
+            .x = BOARD_BACKGROUND.x,
+            .y = BOARD_BACKGROUND.y - BOARD_PADDING - BUTTON_NEW_GAME_HEIGHT,
+            .width = BUTTON_NEW_GAME_WIDTH,
+            .height = BUTTON_NEW_GAME_HEIGHT
+    },
+        .colour = COLOUR_TEXT,
+        .font = font,
+        .text = "New game",
+        .textSize = BUTTON_NEW_GAME_TEXT_SIZE,
+        .textColour = COLOUR_TEXT_ALT,
+        .isActive = true
+    };
+    buttonNewGame.textPosition = GetTextPositionCentred(buttonNewGame.rectangle, buttonNewGame.font, buttonNewGame.text, buttonNewGame.textSize);
 
+    Button buttonOptions = {
+        .rectangle = {
+            .x = buttonNewGame.rectangle.x + buttonNewGame.rectangle.width + SCORE_DISPLAY_SPACING,
+            .y = buttonNewGame.rectangle.y,
+            .width = BUTTON_NEW_GAME_HEIGHT,
+            .height = BUTTON_NEW_GAME_HEIGHT
+    },
+        .colour = COLOUR_TEXT,
+        .font = font,
+        .text = "",
+        .textSize = 0,
+        .textColour = BLANK,
+        .isActive = true
+    };
+    buttonOptions.textPosition = GetTextPositionCentred(buttonOptions.rectangle, buttonOptions.font, buttonOptions.text, buttonOptions.textSize);
+
+    Keybinds keybinds = {
+        .up = KEY_UP,
+        .down = KEY_DOWN,
+        .left = KEY_LEFT,
+        .right = KEY_RIGHT
+    };
+    i32 buttonToBindIndex = -1;
+
+    Button buttonsKeybinds[KEY_BINDINGS_COUNT];
+    for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
+        buttonsKeybinds[i] = (Button){
+            .colour = COLOUR_TEXT,
+            .font = font,
+            .text = KeyCodeToString(keybinds.binds[i]),
+            .textSize = BUTTONS_KEYBINDS_TEXT_SIZE,
+            .textColour = COLOUR_TEXT_ALT,
+            .isActive = false
+        };
+        Vector2 textDimensions = MeasureTextEx(buttonsKeybinds[i].font, buttonsKeybinds[i].text, buttonsKeybinds[i].textSize, 0.0f);
+        buttonsKeybinds[i].rectangle = (Rectangle){
+            .x = BUTTONS_KEYBINDS_START_X + BUTTONS_KEYBINDS_OFFSET_X,
+            .y = BUTTONS_KEYBINDS_START_Y + i * BUTTONS_KEYBINDS_POSITION_DELTA,
+            .width = MaxF32(textDimensions.x + 2 * BUTTONS_KEYBINDS_TEXT_MARGIN, BUTTONS_KEYBINDS_HEIGHT),
+            .height = BUTTONS_KEYBINDS_HEIGHT
+        };
+        buttonsKeybinds[i].textPosition = GetTextPositionCentred(buttonsKeybinds[i].rectangle, buttonsKeybinds[i].font, 
+            buttonsKeybinds[i].text, buttonsKeybinds[i].textSize);
+    }
 
     while (!WindowShouldClose()) {
+        // CONTINUE HERE! Implement the actual button logic for the keybinds
+        if (IsKeyDown(KEY_ONE)) {
+            i32 key = 0;
+            i32 newKey = 0;
+            while ((newKey = GetKeyPressed()) != 0) {
+                key = newKey;
+            }
+            if (key != 0 && key != KEY_ONE) {
+                keybinds.up = key;
+            }
+        }
+
+        if (IsButtonPressed(&buttonOptions) && !isGameOver) {
+            isOptionsMenuOpen = !isOptionsMenuOpen;
+
+            if (isOptionsMenuOpen) {
+                for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
+                    buttonsKeybinds[i].isActive = true;
+                }
+            } else {
+                for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
+                    buttonsKeybinds[i].isActive = false;
+                }
+
+                if (buttonToBindIndex != -1) {
+                    keybinds.binds[buttonToBindIndex] = 0;
+
+                    buttonsKeybinds[buttonToBindIndex].text = "";
+                    buttonsKeybinds[buttonToBindIndex].rectangle.width = BUTTONS_KEYBINDS_HEIGHT;
+
+                    buttonToBindIndex = -1;
+                }
+            }
+        }
+
+        if (isOptionsMenuOpen) {
+            optionsTimer -= GetFrameTime();
+            if (optionsTimer < 0.0f) {
+                optionsTimer = 0.0f;
+            }
+
+            for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
+                if (IsButtonPressed(&buttonsKeybinds[i])) {
+                    buttonToBindIndex = i;
+                }
+            }
+
+            if (buttonToBindIndex != -1) {
+                i32 key = 0;
+                i32 newKey = 0;
+                while ((newKey = GetKeyPressed()) != 0) {
+                    key = newKey;
+                }
+                if (key != 0) {
+                    keybinds.binds[buttonToBindIndex] = key;
+
+                    buttonsKeybinds[buttonToBindIndex].text = KeyCodeToString(key);
+                    f32 textWidth = MeasureTextEx(buttonsKeybinds[buttonToBindIndex].font, buttonsKeybinds[buttonToBindIndex].text, 
+                        buttonsKeybinds[buttonToBindIndex].textSize, 0.0f).x;
+                    buttonsKeybinds[buttonToBindIndex].rectangle.width = MaxF32(textWidth + 2 * BUTTONS_KEYBINDS_TEXT_MARGIN, BUTTONS_KEYBINDS_HEIGHT);
+                    buttonsKeybinds[buttonToBindIndex].textPosition = GetTextPositionCentred(buttonsKeybinds[buttonToBindIndex].rectangle, 
+                        buttonsKeybinds[buttonToBindIndex].font, buttonsKeybinds[buttonToBindIndex].text, buttonsKeybinds[buttonToBindIndex].textSize);
+
+                    buttonToBindIndex = -1;
+                }
+            }
+        } else {
+            optionsTimer += GetFrameTime();
+            if (optionsTimer > OPTIONS_TIMER_DURATION) {
+                optionsTimer = OPTIONS_TIMER_DURATION;
+            }
+        }
+
         board.movingTiles.timer -= GetFrameTime();
         if (board.movingTiles.timer <= 0.0f) {
             board.movingTiles.timer = 0.0f;
@@ -661,10 +992,6 @@ int main() {
             if (gameOverFadeInTimer < 0.0f) {
                 gameOverFadeInTimer = 0.0f;
             }
-        }
-
-        if (IsButtonPressed(&buttonOptions)) {
-            MinimizeWindow();
         }
 
         if (IsButtonPressed(&buttonNewGame) && !(isGameOver && gameOverFadeInTimer > 0.0f)) {
@@ -698,7 +1025,7 @@ int main() {
             buttonTryAgain.isActive = false;
         }
 
-        if (!isGameOver && Move(&board, &score)) {
+        if (!isGameOver && !isOptionsMenuOpen && Move(&board, &keybinds, &score)) {
             board.newTile = GetRandomFreeTile(board.board);
             board.board[board.newTile] = GetRandomValue(1, 2);
             if (IsBoardFull(&board.board) && !CanMove(&board.board)) {
@@ -722,22 +1049,27 @@ int main() {
 
         DisplayBoard(&board, font);
 
-        if (!isGameOver) {
+        if (board.combinedTimer > 0.0f) {
+            DisplayCombinedTiles(&board, font);
+        } else {
             if (board.newTile != -1) {
                 DisplayNewTile(&board);
             }
 
             DisplayMovingTiles(&board, font);
-        } else {
+        }
+
+        if (isGameOver) {
             DisplayGameOver(font, gameOverFadeInTimer, &buttonTryAgain);
         }
 
         DisplayScores(font, score, highscore);
 
-        DisplayButtons(&buttonNewGame, &buttonOptions, &optionsSymbol);
+        DisplayButtons(&buttonNewGame, &buttonOptions, &optionsSymbol, optionsTimer);
 
-        if (board.combinedTimer > 0.0f) {
-            DisplayCombinedTiles(&board, font);
+        // TODO: Custom symbols for some keys? (like the arrow keys, etc.)
+        if (optionsTimer < OPTIONS_TIMER_DURATION) {
+            DisplayOptions(buttonsKeybinds, optionsTimer, buttonToBindIndex);
         }
 
         EndDrawing();
