@@ -49,6 +49,12 @@
 
 #define OPTIONS_TIMER_DURATION 0.2f
 #define KEY_BINDINGS_COUNT 4
+#define OPTIONS_VOLUME_SLIDER_X (BOARD_BACKGROUND.x + 2 * TILE_SPACING + TILE_SIZE)
+#define OPTIONS_VOLUME_SLIDER_Y (BOARD_BACKGROUND.y + 3 * TILE_SPACING + 2.5f * TILE_SIZE)
+#define OPTIONS_VOLUME_SLIDER_WIDTH (TILE_SPACING + 2 * TILE_SIZE)
+#define OPTIONS_VOLUME_SLIDER_HEIGHT 4.0f
+#define OPTIONS_VOLUME_SLIDER_BUTTON_SIZE 20.0f
+#define OPTIONS_VOLUME_LABEL_OFFSET (TILE_SPACING + 0.5f * TILE_SIZE)
 
 #define WINDOW_WIDTH (TILE_COUNT_X * TILE_SIZE + (TILE_COUNT_X + 1) * TILE_SPACING + 2 * BOARD_PADDING)
 #define WINDOW_HEIGHT (TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * TILE_SPACING + 3 * BOARD_PADDING + SCORE_DISPLAY_HEIGHT)
@@ -60,6 +66,12 @@
 #define COLOUR_TILES_COUNT 13
 
 #define FONT_SIZE 80.0f
+
+#define INITIAL_VOLUME 0.75f
+#define SFX_MOVE_TILES 0.5f
+#define SFX_COMBINE_TILES 1.0f
+#define SFX_BUTTON_PRESS 0.5f
+#define SFX_GAME_OVER 1.0f
 
 
 const Color COLOUR_BACKGROUND = {.r = 250, .g = 248, .b = 239, .a = 255};
@@ -582,7 +594,7 @@ static void DisplayCombinedTiles(Board *board, Font font) {
     }
 }
 
-static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 buttonToBindIndex) {
+static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 buttonToBindIndex, Button *buttonVolumeSlider) {
     f32 t = (OPTIONS_TIMER_DURATION - optionsTimer) / OPTIONS_TIMER_DURATION;
 
     Color colourOverlay = COLOUR_GAME_OVER_OVERLAY;
@@ -609,9 +621,9 @@ static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 button
             DrawTextEx(buttonsKeybinds[i].font, "[Press new key]", textPosition, buttonsKeybinds[i].textSize, 0.0f, textColour);
         } else {
             DrawRectangleRounded(buttonsKeybinds[i].rectangle, 0.3f, 4, colour);
-            DrawTextEx(buttonsKeybinds[i].font, buttonsKeybinds[i].text, buttonsKeybinds[i].textPosition, buttonsKeybinds[i].textSize, 
+            DrawTextEx(buttonsKeybinds[i].font, buttonsKeybinds[i].text, buttonsKeybinds[i].textPosition, buttonsKeybinds[i].textSize,
                 0.0f, textColour);
-        }  
+        }
 
         Vector2 labelTextDimensions = MeasureTextEx(buttonsKeybinds[i].font, labelsText[i], BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f);
         Vector2 labelTextPosition = {
@@ -620,6 +632,29 @@ static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 button
         };
         DrawTextEx(buttonsKeybinds[i].font, labelsText[i], labelTextPosition, BUTTONS_KEYBINDS_TEXT_SIZE, 0, colour);
     }
+
+
+    Color colourLabel = buttonsKeybinds[0].colour;
+    colourLabel.a *= t;
+
+    Vector2 labelVolumeDimensions = MeasureTextEx(buttonsKeybinds[0].font, "Volume", BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f);
+    Vector2 labelVolumePosition = {
+        .x = OPTIONS_VOLUME_SLIDER_X - OPTIONS_VOLUME_LABEL_OFFSET - labelVolumeDimensions.x / 2,
+        .y = OPTIONS_VOLUME_SLIDER_Y - labelVolumeDimensions.y / 2};
+    DrawTextEx(buttonsKeybinds[0].font, "Volume", labelVolumePosition, BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f, colourLabel);
+
+    Color colourSlider = COLOUR_BOARD_BACKGROUND;
+    colourSlider.a *= t;
+
+    DrawLineEx(
+        (Vector2){OPTIONS_VOLUME_SLIDER_X, OPTIONS_VOLUME_SLIDER_Y}, 
+        (Vector2){OPTIONS_VOLUME_SLIDER_X + OPTIONS_VOLUME_SLIDER_WIDTH, OPTIONS_VOLUME_SLIDER_Y}, 
+        OPTIONS_VOLUME_SLIDER_HEIGHT, colourSlider);
+
+    Color colourButton = buttonVolumeSlider->colour;
+    colourButton.a *= t;
+
+    DrawRectangleRec(buttonVolumeSlider->rectangle, colourButton);
 }
 
 static cJSON *LoadJSON(const char *path) {
@@ -649,6 +684,7 @@ static i32 LoadHighscore(const char *path) {
     return highscore;
 }
 
+// TODO: Also save keybinds and volume?
 static bool SaveHighscore(const char *path, i32 val) {
     cJSON *json = LoadJSON(path);
     if (json == NULL) {
@@ -806,6 +842,20 @@ int main() {
     Texture2D optionsSymbol = LoadTexture("assets/options_symbol.png");
     SetTextureFilter(optionsSymbol, TEXTURE_FILTER_BILINEAR);
 
+    InitAudioDevice();
+
+    Sound sfxMoveTiles = LoadSound("assets/sfx/click_005.ogg");
+    SetSoundVolume(sfxMoveTiles, SFX_MOVE_TILES);
+    Sound sfxCombineTiles = LoadSound("assets/sfx/bong_001.ogg");
+    SetSoundVolume(sfxCombineTiles, SFX_COMBINE_TILES);
+    Sound sfxButtonPress = LoadSound("assets/sfx/switch_004.ogg");
+    SetSoundVolume(sfxButtonPress, SFX_BUTTON_PRESS);
+    Sound sfxGameOver = LoadSound("assets/sfx/error_003.ogg");
+    SetSoundVolume(sfxGameOver, SFX_GAME_OVER);
+
+    // TODO: Change combine sfx to match number of combined tiles AND/OR highest tile value
+    // TODO: 2048 win condition? Maybe just a sound effect or something idk
+
     Board board = {.newTile = -1};
     board.board[GetRandomFreeTile(&board.board)] = 1;
     board.board[GetRandomFreeTile(&board.board)] = 1;
@@ -867,6 +917,24 @@ int main() {
     };
     buttonOptions.textPosition = GetTextPositionCentred(buttonOptions.rectangle, buttonOptions.font, buttonOptions.text, buttonOptions.textSize);
 
+    bool isButtonVolumeSliderHeld = false;
+    SetMasterVolume(INITIAL_VOLUME);
+
+    Button buttonVolumeSlider = {
+        .rectangle = {
+            .x = OPTIONS_VOLUME_SLIDER_X + INITIAL_VOLUME * OPTIONS_VOLUME_SLIDER_WIDTH - OPTIONS_VOLUME_SLIDER_BUTTON_SIZE / 2.0f,
+            .y = OPTIONS_VOLUME_SLIDER_Y - OPTIONS_VOLUME_SLIDER_BUTTON_SIZE / 2.0f,
+            .width = OPTIONS_VOLUME_SLIDER_BUTTON_SIZE,
+            .height = OPTIONS_VOLUME_SLIDER_BUTTON_SIZE
+        },
+        .colour = COLOUR_TEXT,
+        .font = font,
+        .text = "",
+        .textSize = 0.0f,
+        .textColour = BLANK,
+        .isActive = false
+    };
+
     Keybinds keybinds = {
         .up = KEY_UP,
         .down = KEY_DOWN,
@@ -897,16 +965,18 @@ int main() {
     }
 
     while (!WindowShouldClose()) {
-        // CONTINUE HERE! Implement the actual button logic for the keybinds
-        if (IsKeyDown(KEY_ONE)) {
-            i32 key = 0;
-            i32 newKey = 0;
-            while ((newKey = GetKeyPressed()) != 0) {
-                key = newKey;
+        if (IsKeyPressed(KEY_R)) {
+            isGameOver = true;
+
+            board.movingTiles.timer = 0.0f;
+
+            buttonTryAgain.isActive = true;
+
+            if (score > highscore) {
+                SaveHighscore("assets/data.json", score);
             }
-            if (key != 0 && key != KEY_ONE) {
-                keybinds.up = key;
-            }
+
+            PlaySound(sfxGameOver);
         }
 
         if (IsButtonPressed(&buttonOptions) && !isGameOver) {
@@ -916,6 +986,8 @@ int main() {
                 for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
                     buttonsKeybinds[i].isActive = true;
                 }
+
+                buttonVolumeSlider.isActive = true;
             } else {
                 for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
                     buttonsKeybinds[i].isActive = false;
@@ -929,7 +1001,12 @@ int main() {
 
                     buttonToBindIndex = -1;
                 }
+
+                buttonVolumeSlider.isActive = false;
+                isButtonVolumeSliderHeld = false;
             }
+
+            PlaySound(sfxButtonPress);
         }
 
         if (isOptionsMenuOpen) {
@@ -941,6 +1018,8 @@ int main() {
             for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
                 if (IsButtonPressed(&buttonsKeybinds[i])) {
                     buttonToBindIndex = i;
+
+                    PlaySound(sfxButtonPress);
                 }
             }
 
@@ -963,6 +1042,25 @@ int main() {
                     buttonToBindIndex = -1;
                 }
             }
+
+            if (IsButtonPressed(&buttonVolumeSlider)) {
+                isButtonVolumeSliderHeld = true;
+            }
+            else if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+                isButtonVolumeSliderHeld = false;
+            }
+
+            if (isButtonVolumeSliderHeld) {
+                f32 x = GetMousePosition().x;
+                f32 xMin = OPTIONS_VOLUME_SLIDER_X;
+                f32 xMax = OPTIONS_VOLUME_SLIDER_X + OPTIONS_VOLUME_SLIDER_WIDTH;
+                x = x < xMin ? xMin : x > xMax ? xMax : x;
+
+                buttonVolumeSlider.rectangle.x = x - OPTIONS_VOLUME_SLIDER_BUTTON_SIZE / 2.0f;
+
+                f32 volume = (x - xMin) / (xMax - xMin);
+                SetMasterVolume(volume);
+            }
         } else {
             optionsTimer += GetFrameTime();
             if (optionsTimer > OPTIONS_TIMER_DURATION) {
@@ -976,7 +1074,17 @@ int main() {
             board.movingTiles.count = 0;
 
             if (board.newTile != -1) {
-                board.combinedTimer = TILE_COMBINE_DURATION;
+                bool didAnyTilesCombine = false;
+                for (i32 i = 0; i < TILE_COUNT; ++i) {
+                    if (board.combinedTiles[i]) {
+                        didAnyTilesCombine = true;
+                        break;
+                    }
+                }
+                if (didAnyTilesCombine) {
+                    board.combinedTimer = TILE_COMBINE_DURATION;
+                    PlaySound(sfxCombineTiles);
+                }
             }
 
             board.newTile = -1;
@@ -1008,6 +1116,8 @@ int main() {
             gameOverFadeInTimer = GAME_OVER_FADE_IN_DURATION;
 
             isGameOver = false;
+
+            PlaySound(sfxButtonPress);
         }
 
         if (IsButtonPressed(&buttonTryAgain) && gameOverFadeInTimer == 0.0f) {
@@ -1023,6 +1133,8 @@ int main() {
             isGameOver = false;
 
             buttonTryAgain.isActive = false;
+
+            PlaySound(sfxButtonPress);
         }
 
         if (!isGameOver && !isOptionsMenuOpen && Move(&board, &keybinds, &score)) {
@@ -1038,6 +1150,21 @@ int main() {
                 if (score > highscore) {
                     SaveHighscore("assets/data.json", score);
                 }
+
+                PlaySound(sfxGameOver);
+            } else {
+                // 12-ET
+                if (IsKeyPressed(keybinds.up)) {
+                    SetSoundPitch(sfxMoveTiles, 0.79370f);
+                } else if (IsKeyPressed(keybinds.down)) {
+                    SetSoundPitch(sfxMoveTiles, 0.89090f);
+                } else if (IsKeyPressed(keybinds.left)) {
+                    SetSoundPitch(sfxMoveTiles, 1.00000f);
+                } else if (IsKeyPressed(keybinds.right)) {
+                    SetSoundPitch(sfxMoveTiles, 1.12246f);
+                } 
+                
+                PlaySound(sfxMoveTiles);
             }
         }
 
@@ -1069,7 +1196,7 @@ int main() {
 
         // TODO: Custom symbols for some keys? (like the arrow keys, etc.)
         if (optionsTimer < OPTIONS_TIMER_DURATION) {
-            DisplayOptions(buttonsKeybinds, optionsTimer, buttonToBindIndex);
+            DisplayOptions(buttonsKeybinds, optionsTimer, buttonToBindIndex, &buttonVolumeSlider);
         }
 
         EndDrawing();
@@ -1079,8 +1206,7 @@ int main() {
         SaveHighscore("assets/data.json", score);
     }
 
-    UnloadTexture(optionsSymbol);
-    UnloadFont(font);
+    CloseAudioDevice();
 
     CloseWindow();
 
