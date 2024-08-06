@@ -138,6 +138,9 @@
   <ItemGroup>
     <ClInclude Include="common.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="assets\resource.rc" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

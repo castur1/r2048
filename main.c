@@ -55,6 +55,7 @@
 #define OPTIONS_VOLUME_SLIDER_HEIGHT 4.0f
 #define OPTIONS_VOLUME_SLIDER_BUTTON_SIZE 20.0f
 #define OPTIONS_VOLUME_LABEL_OFFSET (TILE_SPACING + 0.5f * TILE_SIZE)
+#define OPTIONS_MUSIC_SLIDER_OFFSET (0.5f * TILE_SPACING + 0.5f * TILE_SIZE)
 
 #define WINDOW_WIDTH (TILE_COUNT_X * TILE_SIZE + (TILE_COUNT_X + 1) * TILE_SPACING + 2 * BOARD_PADDING)
 #define WINDOW_HEIGHT (TILE_COUNT_Y * TILE_SIZE + (TILE_COUNT_Y + 1) * TILE_SPACING + 3 * BOARD_PADDING + SCORE_DISPLAY_HEIGHT)
@@ -68,9 +69,10 @@
 #define FONT_SIZE 80.0f
 
 #define INITIAL_VOLUME 0.75f
+#define MUSIC_VOLUME 0.75f
 #define SFX_MOVE_TILES 0.5f
 #define SFX_COMBINE_TILES 1.0f
-#define SFX_BUTTON_PRESS 0.5f
+#define SFX_BUTTON_PRESS 0.3f
 #define SFX_GAME_OVER 1.0f
 
 
@@ -95,6 +97,9 @@ const Color COLOUR_TILES[] = {
     {.r = 60,  .g = 58,  .b = 50,  .a = 255}  //...
 };
 const Color COLOUR_GAME_OVER_OVERLAY = {.r = 245, .g = 235, .b = 225, .a = 170};
+const Color COLOUR_BUTTON_NONE = {.r = 119, .g = 110, .b = 101, .a = 255};
+const Color COLOUR_BUTTON_HOVER = {.r = 99, .g = 92, .b = 84, .a = 255};
+const Color COLOUR_BUTTON_HELD = {.r = 55, .g = 51, .b = 47, .a = 255};
 
 const Rectangle BOARD_BACKGROUND = {
     .x = BOARD_PADDING,
@@ -119,17 +124,31 @@ typedef struct Board {
     i32 newTile;
 } Board;
 
+typedef enum Button_state {
+    BUTTON_STATE_NONE,
+    BUTTON_STATE_HOVER,
+    BUTTON_STATE_PRESSED,
+    BUTTON_STATE_HELD,
+    BUTTON_STATE_RELEASED
+} Button_state;
+
 typedef struct Button {
     Rectangle rectangle;
-    Color colour;
+    Color colourNone;
+    Color colourHover;
+    Color colourHeld;
 
     Font font;
     const char *text;
     Vector2 textPosition;
     f32 textSize;
-    Color textColour;
+    Color colourTextNone;
+    Color colourTextHover;
+    Color colourTextHeld;
 
     bool isActive;
+    Button_state state;
+    bool isSlider;
 } Button;
 
 typedef struct Keybinds {
@@ -144,6 +163,32 @@ typedef struct Keybinds {
     };
 } Keybinds;
 
+
+static Color GetButtonColour(Button *button, bool getTextColour) {
+    if (getTextColour) {
+        switch (button->state) {
+            case BUTTON_STATE_NONE:
+                return button->colourTextNone;
+            case BUTTON_STATE_HOVER:
+                return button->colourTextHover;
+            case BUTTON_STATE_PRESSED:
+            case BUTTON_STATE_HELD:
+            case BUTTON_STATE_RELEASED:
+                return button->colourTextHeld;
+        }
+    } else {
+        switch (button->state) {
+            case BUTTON_STATE_NONE:
+                return button->colourNone;
+            case BUTTON_STATE_HOVER:
+                return button->colourHover;
+            case BUTTON_STATE_PRESSED:
+            case BUTTON_STATE_HELD:
+            case BUTTON_STATE_RELEASED:
+                return button->colourHeld;
+        }
+    }
+}
 
 static u32 PowerOf2(i32 exponent) {
     if (exponent < 0 || exponent > 32) {
@@ -450,9 +495,9 @@ static void DisplayGameOver(Font font, f32 timer, Button *buttonTryAgain) {
     colourOverlay.a *= t;
     Color colourText = COLOUR_TEXT;
     colourText.a *= t;
-    Color colourButton = buttonTryAgain->colour;
+    Color colourButton = buttonTryAgain->colourNone;
     colourButton.a *= t;
-    Color colourButtonText = buttonTryAgain->textColour;
+    Color colourButtonText = buttonTryAgain->colourTextNone;
     colourButtonText.a *= t;
 
     DrawRectangleRounded(BOARD_BACKGROUND, 0.04f, 4, colourOverlay);
@@ -522,10 +567,10 @@ static void DisplayScores(Font font, i32 score, i32 highscore) {
 }
 
 static void DisplayButtons(Button *newGame, Button *options, Texture2D *optionsSymbol, f32 optionsTimer) {
-    DrawRectangleRounded(newGame->rectangle, 0.3f, 4, newGame->colour);
-    DrawTextEx(newGame->font, newGame->text, newGame->textPosition, newGame->textSize, 0.0f, newGame->textColour);
+    DrawRectangleRounded(newGame->rectangle, 0.3f, 4, GetButtonColour(newGame, false));
+    DrawTextEx(newGame->font, newGame->text, newGame->textPosition, newGame->textSize, 0.0f, GetButtonColour(newGame, true));
 
-    DrawRectangleRounded(options->rectangle, 0.3f, 4, options->colour);
+    DrawRectangleRounded(options->rectangle, 0.3f, 4, GetButtonColour(options, false));
 
     if (optionsTimer == 0.0f || optionsTimer == OPTIONS_TIMER_DURATION) {
         DrawTexture(*optionsSymbol, options->rectangle.x + options->rectangle.width / 2.0f - optionsSymbol->width / 2.0f, 
@@ -594,7 +639,7 @@ static void DisplayCombinedTiles(Board *board, Font font) {
     }
 }
 
-static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 buttonToBindIndex, Button *buttonVolumeSlider) {
+static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 buttonToBindIndex, Button *buttonVolumeSlider, Button *buttonMusicSlider) {
     f32 t = (OPTIONS_TIMER_DURATION - optionsTimer) / OPTIONS_TIMER_DURATION;
 
     Color colourOverlay = COLOUR_GAME_OVER_OVERLAY;
@@ -604,9 +649,9 @@ static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 button
 
     const char *labelsText[KEY_BINDINGS_COUNT] = {"Up", "Down", "Left", "Right"};
     for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
-        Color colour = buttonsKeybinds[i].colour;
+        Color colour = GetButtonColour(&buttonsKeybinds[i], false);
         colour.a *= t;
-        Color textColour = buttonsKeybinds[i].textColour;
+        Color textColour = GetButtonColour(&buttonsKeybinds[i], true);
         textColour.a *= t;
 
         if (i == buttonToBindIndex) {
@@ -633,28 +678,38 @@ static void DisplayOptions(Button *buttonsKeybinds, f32 optionsTimer, i32 button
         DrawTextEx(buttonsKeybinds[i].font, labelsText[i], labelTextPosition, BUTTONS_KEYBINDS_TEXT_SIZE, 0, colour);
     }
 
-
-    Color colourLabel = buttonsKeybinds[0].colour;
-    colourLabel.a *= t;
-
-    Vector2 labelVolumeDimensions = MeasureTextEx(buttonsKeybinds[0].font, "Volume", BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f);
-    Vector2 labelVolumePosition = {
-        .x = OPTIONS_VOLUME_SLIDER_X - OPTIONS_VOLUME_LABEL_OFFSET - labelVolumeDimensions.x / 2,
-        .y = OPTIONS_VOLUME_SLIDER_Y - labelVolumeDimensions.y / 2};
-    DrawTextEx(buttonsKeybinds[0].font, "Volume", labelVolumePosition, BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f, colourLabel);
-
     Color colourSlider = COLOUR_BOARD_BACKGROUND;
     colourSlider.a *= t;
 
-    DrawLineEx(
-        (Vector2){OPTIONS_VOLUME_SLIDER_X, OPTIONS_VOLUME_SLIDER_Y}, 
+    Color colourVolume = GetButtonColour(buttonVolumeSlider, false);
+    colourVolume.a *= t;
+
+    Vector2 labelVolumeDimensions = MeasureTextEx(buttonVolumeSlider->font, "Volume", BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f);
+    Vector2 labelVolumePosition = {
+        .x = OPTIONS_VOLUME_SLIDER_X - OPTIONS_VOLUME_LABEL_OFFSET - labelVolumeDimensions.x / 2,
+        .y = OPTIONS_VOLUME_SLIDER_Y - labelVolumeDimensions.y / 2};
+    DrawTextEx(buttonVolumeSlider->font, "Volume", labelVolumePosition, BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f, colourVolume);
+
+    DrawLineEx((Vector2){OPTIONS_VOLUME_SLIDER_X, OPTIONS_VOLUME_SLIDER_Y}, 
         (Vector2){OPTIONS_VOLUME_SLIDER_X + OPTIONS_VOLUME_SLIDER_WIDTH, OPTIONS_VOLUME_SLIDER_Y}, 
         OPTIONS_VOLUME_SLIDER_HEIGHT, colourSlider);
 
-    Color colourButton = buttonVolumeSlider->colour;
-    colourButton.a *= t;
+    DrawRectangleRounded(buttonVolumeSlider->rectangle, 0.2f, 4, colourVolume);
 
-    DrawRectangleRec(buttonVolumeSlider->rectangle, colourButton);
+    Color colourMusic = GetButtonColour(buttonMusicSlider, false);
+    colourMusic.a *= t;
+
+    Vector2 labelMusicDimensions = MeasureTextEx(buttonMusicSlider->font, "Music", BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f);
+    Vector2 labelMusicPosition = {
+        .x = OPTIONS_VOLUME_SLIDER_X - OPTIONS_VOLUME_LABEL_OFFSET - labelMusicDimensions.x / 2,
+        .y = OPTIONS_VOLUME_SLIDER_Y + OPTIONS_MUSIC_SLIDER_OFFSET - labelMusicDimensions.y / 2};
+    DrawTextEx(buttonMusicSlider->font, "Music", labelMusicPosition, BUTTONS_KEYBINDS_TEXT_SIZE, 0.0f, colourMusic);
+
+    DrawLineEx((Vector2){OPTIONS_VOLUME_SLIDER_X, OPTIONS_VOLUME_SLIDER_Y + OPTIONS_MUSIC_SLIDER_OFFSET}, 
+        (Vector2){OPTIONS_VOLUME_SLIDER_X + OPTIONS_VOLUME_SLIDER_WIDTH, OPTIONS_VOLUME_SLIDER_Y + OPTIONS_MUSIC_SLIDER_OFFSET}, 
+        OPTIONS_VOLUME_SLIDER_HEIGHT, colourSlider);
+
+    DrawRectangleRounded(buttonMusicSlider->rectangle, 0.2f, 4, colourMusic);
 }
 
 static cJSON *LoadJSON(const char *path) {
@@ -706,16 +761,6 @@ static bool SaveHighscore(const char *path, i32 val) {
     free(str);
 
     return true;
-}
-
-// TODO: More sophisticated button logic
-static bool IsButtonPressed(Button *button) {
-    if (!button->isActive) {
-        return false;
-    }
-
-    Vector2 mousePos = GetMousePosition();
-    return IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mousePos, button->rectangle);
 }
 
 static const char *KeyCodeToString(i32 key) {
@@ -828,6 +873,41 @@ static const char *KeyCodeToString(i32 key) {
     }
 }
 
+static void UpdateButtonState(Button *button) {
+    if (!button->isActive) {
+        button->state = BUTTON_STATE_NONE;
+    }
+
+    Vector2 cursorPosition = GetMousePosition();
+    if (CheckCollisionPointRec(cursorPosition, button->rectangle)) {
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            button->state = BUTTON_STATE_PRESSED;
+        } else if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            if (button->state == BUTTON_STATE_PRESSED || button->state == BUTTON_STATE_HELD) {
+                button->state = BUTTON_STATE_HELD;
+            } else {
+                button->state = BUTTON_STATE_HOVER;
+            }
+        } else {
+            if (button->state == BUTTON_STATE_PRESSED || button->state == BUTTON_STATE_HELD) {
+                button->state = BUTTON_STATE_RELEASED;
+            } else {
+                button->state = BUTTON_STATE_HOVER;
+            }
+        }
+    } else {
+        if (button->state == BUTTON_STATE_PRESSED || button->state == BUTTON_STATE_HELD) {
+            if (button->isSlider && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+                button->state = BUTTON_STATE_HELD;
+            } else {
+                button->state = BUTTON_STATE_RELEASED;
+            }
+        } else {
+            button->state = BUTTON_STATE_NONE;
+        }
+    }
+}
+
 int main() {
     //SetConfigFlags(FLAG_MSAA_4X_HINT); // Doesn't do anything?
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "2048");
@@ -844,6 +924,8 @@ int main() {
 
     InitAudioDevice();
 
+    SetMasterVolume(INITIAL_VOLUME);
+
     Sound sfxMoveTiles = LoadSound("assets/sfx/click_005.ogg");
     SetSoundVolume(sfxMoveTiles, SFX_MOVE_TILES);
     Sound sfxCombineTiles = LoadSound("assets/sfx/bong_001.ogg");
@@ -852,6 +934,14 @@ int main() {
     SetSoundVolume(sfxButtonPress, SFX_BUTTON_PRESS);
     Sound sfxGameOver = LoadSound("assets/sfx/error_003.ogg");
     SetSoundVolume(sfxGameOver, SFX_GAME_OVER);
+
+    // CONTINUE HERE! Commit and push to GitHub!
+    Music testMusicIntro = LoadMusicStream("assets/Project_1_intro.ogg");
+    SetMusicVolume(testMusicIntro, MUSIC_VOLUME);
+    testMusicIntro.looping = false;
+    Music testMusicLoop = LoadMusicStream("assets/Project_1_loop.ogg");
+    SetMusicVolume(testMusicLoop, MUSIC_VOLUME); // TODO: Why does testMusicIntro control both of the music streams' volumes? Bug?
+    PlayMusicStream(testMusicIntro);
 
     // TODO: Change combine sfx to match number of combined tiles AND/OR highest tile value
     // TODO: 2048 win condition? Maybe just a sound effect or something idk
@@ -876,12 +966,16 @@ int main() {
             .width = BUTTON_TRY_AGAIN_WIDTH,
             .height = BUTTON_TRY_AGAIN_HEIGHT
         },
-        .colour = COLOUR_TEXT,
+        .colourNone = COLOUR_BUTTON_NONE,
+        .colourHover = COLOUR_BUTTON_HOVER,
+        .colourHeld = COLOUR_BUTTON_HELD,
         .font = font,
         .text = "Try again?",
         .textSize = BUTTON_TRY_AGAIN_TEXT_SIZE,
-        .textColour = COLOUR_TEXT_ALT,
-        .isActive = false
+        .colourTextNone = COLOUR_TEXT_ALT,
+        .isActive = false,
+        .isSlider = false,
+        .state = BUTTON_STATE_NONE
     };
     buttonTryAgain.textPosition = GetTextPositionCentred(buttonTryAgain.rectangle, buttonTryAgain.font, buttonTryAgain.text, buttonTryAgain.textSize);
 
@@ -892,12 +986,18 @@ int main() {
             .width = BUTTON_NEW_GAME_WIDTH,
             .height = BUTTON_NEW_GAME_HEIGHT
     },
-        .colour = COLOUR_TEXT,
+        .colourNone = COLOUR_BUTTON_NONE,
+        .colourHover = COLOUR_BUTTON_HOVER,
+        .colourHeld = COLOUR_BUTTON_HELD,
         .font = font,
         .text = "New game",
         .textSize = BUTTON_NEW_GAME_TEXT_SIZE,
-        .textColour = COLOUR_TEXT_ALT,
-        .isActive = true
+        .colourTextNone = COLOUR_TEXT_ALT,
+        .colourTextHover = COLOUR_TEXT_ALT,
+        .colourTextHeld = COLOUR_TEXT_ALT,
+        .isActive = true,
+        .isSlider = false,
+        .state = BUTTON_STATE_NONE
     };
     buttonNewGame.textPosition = GetTextPositionCentred(buttonNewGame.rectangle, buttonNewGame.font, buttonNewGame.text, buttonNewGame.textSize);
 
@@ -908,17 +1008,20 @@ int main() {
             .width = BUTTON_NEW_GAME_HEIGHT,
             .height = BUTTON_NEW_GAME_HEIGHT
     },
-        .colour = COLOUR_TEXT,
+        .colourNone = COLOUR_BUTTON_NONE,
+        .colourHover = COLOUR_BUTTON_HOVER,
+        .colourHeld = COLOUR_BUTTON_HELD,
         .font = font,
         .text = "",
         .textSize = 0,
-        .textColour = BLANK,
-        .isActive = true
+        .colourTextNone = COLOUR_TEXT_ALT,
+        .colourTextHover = COLOUR_TEXT_ALT,
+        .colourTextHeld = COLOUR_TEXT_ALT,
+        .isActive = true,
+        .isSlider = false,
+        .state = BUTTON_STATE_NONE
     };
     buttonOptions.textPosition = GetTextPositionCentred(buttonOptions.rectangle, buttonOptions.font, buttonOptions.text, buttonOptions.textSize);
-
-    bool isButtonVolumeSliderHeld = false;
-    SetMasterVolume(INITIAL_VOLUME);
 
     Button buttonVolumeSlider = {
         .rectangle = {
@@ -927,12 +1030,39 @@ int main() {
             .width = OPTIONS_VOLUME_SLIDER_BUTTON_SIZE,
             .height = OPTIONS_VOLUME_SLIDER_BUTTON_SIZE
         },
-        .colour = COLOUR_TEXT,
+        .colourNone = COLOUR_BUTTON_NONE,
+        .colourHover = COLOUR_BUTTON_HOVER,
+        .colourHeld = COLOUR_BUTTON_HELD,
         .font = font,
         .text = "",
         .textSize = 0.0f,
-        .textColour = BLANK,
-        .isActive = false
+        .colourTextNone = COLOUR_TEXT_ALT,
+        .colourTextHover = COLOUR_TEXT_ALT,
+        .colourTextHeld = COLOUR_TEXT_ALT,
+        .isActive = false,
+        .isSlider = true,
+        .state = BUTTON_STATE_NONE
+    };
+
+    Button buttonMusicSlider = {
+        .rectangle = {
+            .x = OPTIONS_VOLUME_SLIDER_X + MUSIC_VOLUME * OPTIONS_VOLUME_SLIDER_WIDTH - OPTIONS_VOLUME_SLIDER_BUTTON_SIZE / 2.0f,
+            .y = OPTIONS_VOLUME_SLIDER_Y + OPTIONS_MUSIC_SLIDER_OFFSET - OPTIONS_VOLUME_SLIDER_BUTTON_SIZE / 2.0f,
+            .width = OPTIONS_VOLUME_SLIDER_BUTTON_SIZE,
+            .height = OPTIONS_VOLUME_SLIDER_BUTTON_SIZE
+    },
+        .colourNone = COLOUR_BUTTON_NONE,
+        .colourHover = COLOUR_BUTTON_HOVER,
+        .colourHeld = COLOUR_BUTTON_HELD,
+        .font = font,
+        .text = "",
+        .textSize = 0.0f,
+        .colourTextNone = COLOUR_TEXT_ALT,
+        .colourTextHover = COLOUR_TEXT_ALT,
+        .colourTextHeld = COLOUR_TEXT_ALT,
+        .isActive = false,
+        .isSlider = true,
+        .state = BUTTON_STATE_NONE
     };
 
     Keybinds keybinds = {
@@ -946,12 +1076,18 @@ int main() {
     Button buttonsKeybinds[KEY_BINDINGS_COUNT];
     for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
         buttonsKeybinds[i] = (Button){
-            .colour = COLOUR_TEXT,
+            .colourNone = COLOUR_BUTTON_NONE,
+            .colourHover = COLOUR_BUTTON_HOVER,
+            .colourHeld = COLOUR_BUTTON_HELD,
             .font = font,
             .text = KeyCodeToString(keybinds.binds[i]),
             .textSize = BUTTONS_KEYBINDS_TEXT_SIZE,
-            .textColour = COLOUR_TEXT_ALT,
-            .isActive = false
+            .colourTextNone = COLOUR_TEXT_ALT,
+            .colourTextHover = COLOUR_TEXT_ALT,
+            .colourTextHeld = COLOUR_TEXT_ALT,
+            .isActive = false,
+            .isSlider = false,
+            .state = BUTTON_STATE_NONE
         };
         Vector2 textDimensions = MeasureTextEx(buttonsKeybinds[i].font, buttonsKeybinds[i].text, buttonsKeybinds[i].textSize, 0.0f);
         buttonsKeybinds[i].rectangle = (Rectangle){
@@ -965,21 +1101,22 @@ int main() {
     }
 
     while (!WindowShouldClose()) {
-        if (IsKeyPressed(KEY_R)) {
-            isGameOver = true;
-
-            board.movingTiles.timer = 0.0f;
-
-            buttonTryAgain.isActive = true;
-
-            if (score > highscore) {
-                SaveHighscore("assets/data.json", score);
-            }
-
-            PlaySound(sfxGameOver);
+        UpdateMusicStream(testMusicIntro);
+        UpdateMusicStream(testMusicLoop);
+        if (!IsMusicStreamPlaying(testMusicIntro) && !IsMusicStreamPlaying(testMusicLoop)) {
+            PlayMusicStream(testMusicLoop);
         }
 
-        if (IsButtonPressed(&buttonOptions) && !isGameOver) {
+        UpdateButtonState(&buttonTryAgain);
+        UpdateButtonState(&buttonNewGame);
+        UpdateButtonState(&buttonOptions);
+        UpdateButtonState(&buttonVolumeSlider);
+        UpdateButtonState(&buttonMusicSlider);
+        for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
+            UpdateButtonState(&buttonsKeybinds[i]);
+        }
+
+        if (buttonOptions.state == BUTTON_STATE_PRESSED && !isGameOver) {
             isOptionsMenuOpen = !isOptionsMenuOpen;
 
             if (isOptionsMenuOpen) {
@@ -988,6 +1125,7 @@ int main() {
                 }
 
                 buttonVolumeSlider.isActive = true;
+                buttonMusicSlider.isActive = true;
             } else {
                 for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
                     buttonsKeybinds[i].isActive = false;
@@ -1003,7 +1141,7 @@ int main() {
                 }
 
                 buttonVolumeSlider.isActive = false;
-                isButtonVolumeSliderHeld = false;
+                buttonMusicSlider.isActive = false;
             }
 
             PlaySound(sfxButtonPress);
@@ -1016,7 +1154,7 @@ int main() {
             }
 
             for (i32 i = 0; i < KEY_BINDINGS_COUNT; ++i) {
-                if (IsButtonPressed(&buttonsKeybinds[i])) {
+                if (buttonsKeybinds[i].state == BUTTON_STATE_PRESSED) {
                     buttonToBindIndex = i;
 
                     PlaySound(sfxButtonPress);
@@ -1043,14 +1181,7 @@ int main() {
                 }
             }
 
-            if (IsButtonPressed(&buttonVolumeSlider)) {
-                isButtonVolumeSliderHeld = true;
-            }
-            else if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-                isButtonVolumeSliderHeld = false;
-            }
-
-            if (isButtonVolumeSliderHeld) {
+            if (buttonVolumeSlider.state == BUTTON_STATE_HELD) {
                 f32 x = GetMousePosition().x;
                 f32 xMin = OPTIONS_VOLUME_SLIDER_X;
                 f32 xMax = OPTIONS_VOLUME_SLIDER_X + OPTIONS_VOLUME_SLIDER_WIDTH;
@@ -1060,6 +1191,19 @@ int main() {
 
                 f32 volume = (x - xMin) / (xMax - xMin);
                 SetMasterVolume(volume);
+            }
+
+            if (buttonMusicSlider.state == BUTTON_STATE_HELD) {
+                f32 x = GetMousePosition().x;
+                f32 xMin = OPTIONS_VOLUME_SLIDER_X;
+                f32 xMax = OPTIONS_VOLUME_SLIDER_X + OPTIONS_VOLUME_SLIDER_WIDTH;
+                x = x < xMin ? xMin : x > xMax ? xMax : x;
+
+                buttonMusicSlider.rectangle.x = x - OPTIONS_VOLUME_SLIDER_BUTTON_SIZE / 2.0f;
+
+                f32 volume = (x - xMin) / (xMax - xMin);
+                SetMusicVolume(testMusicIntro, volume);
+                SetMusicVolume(testMusicLoop, volume);
             }
         } else {
             optionsTimer += GetFrameTime();
@@ -1102,7 +1246,7 @@ int main() {
             }
         }
 
-        if (IsButtonPressed(&buttonNewGame) && !(isGameOver && gameOverFadeInTimer > 0.0f)) {
+        if (buttonNewGame.state == BUTTON_STATE_PRESSED && !(isGameOver && gameOverFadeInTimer > 0.0f)) {
             board = (Board){0};
             board.board[GetRandomFreeTile(&board.board)] = 1;
             board.board[GetRandomFreeTile(&board.board)] = 1;
@@ -1120,7 +1264,7 @@ int main() {
             PlaySound(sfxButtonPress);
         }
 
-        if (IsButtonPressed(&buttonTryAgain) && gameOverFadeInTimer == 0.0f) {
+        if ((buttonTryAgain.state == BUTTON_STATE_PRESSED || IsKeyPressed(KEY_ENTER)) && gameOverFadeInTimer == 0.0f) {
             board = (Board){0};
             board.board[GetRandomFreeTile(&board.board)] = 1;
             board.board[GetRandomFreeTile(&board.board)] = 1;
@@ -1196,7 +1340,7 @@ int main() {
 
         // TODO: Custom symbols for some keys? (like the arrow keys, etc.)
         if (optionsTimer < OPTIONS_TIMER_DURATION) {
-            DisplayOptions(buttonsKeybinds, optionsTimer, buttonToBindIndex, &buttonVolumeSlider);
+            DisplayOptions(buttonsKeybinds, optionsTimer, buttonToBindIndex, &buttonVolumeSlider, &buttonMusicSlider);
         }
 
         EndDrawing();
